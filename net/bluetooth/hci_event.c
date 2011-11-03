@@ -292,7 +292,8 @@ static void hci_cc_write_encrypt_mode(struct hci_dev *hdev, struct sk_buff *skb)
 
 static void hci_cc_write_scan_enable(struct hci_dev *hdev, struct sk_buff *skb)
 {
-	__u8 status = *((__u8 *) skb->data);
+	__u8 param, status = *((__u8 *) skb->data);
+	int old_pscan, old_iscan;
 	void *sent;
 
 	BT_DBG("%s status 0x%x", hdev->name, status);
@@ -301,30 +302,32 @@ static void hci_cc_write_scan_enable(struct hci_dev *hdev, struct sk_buff *skb)
 	if (!sent)
 		return;
 
-	if (!status) {
-		__u8 param = *((__u8 *) sent);
-		int old_pscan, old_iscan;
-		hci_dev_lock(hdev);
+	param = *((__u8 *) sent);
 
-		old_pscan = test_and_clear_bit(HCI_PSCAN, &hdev->flags);
-		old_iscan = test_and_clear_bit(HCI_ISCAN, &hdev->flags);
+	hci_dev_lock(hdev);
 
-		if (param & SCAN_INQUIRY) {
-			set_bit(HCI_ISCAN, &hdev->flags);
-			if (!old_iscan)
-				mgmt_discoverable(hdev->id, 1);
-		} else if (old_iscan)
-			mgmt_discoverable(hdev->id, 0);
+	if (status != 0)
+		goto done;
 
-		if (param & SCAN_PAGE) {
-			set_bit(HCI_PSCAN, &hdev->flags);
-			if (!old_pscan)
-				mgmt_connectable(hdev->id, 1);
-		} else if (old_pscan)
-			mgmt_connectable(hdev->id, 0);
-		hci_dev_unlock(hdev);
-	}
+	old_pscan = test_and_clear_bit(HCI_PSCAN, &hdev->flags);
+	old_iscan = test_and_clear_bit(HCI_ISCAN, &hdev->flags);
 
+	if (param & SCAN_INQUIRY) {
+		set_bit(HCI_ISCAN, &hdev->flags);
+		if (!old_iscan)
+			mgmt_discoverable(hdev->id, 1);
+	} else if (old_iscan)
+		mgmt_discoverable(hdev->id, 0);
+
+	if (param & SCAN_PAGE) {
+		set_bit(HCI_PSCAN, &hdev->flags);
+		if (!old_pscan)
+			mgmt_connectable(hdev->id, 1);
+	} else if (old_pscan)
+		mgmt_connectable(hdev->id, 0);
+
+done:
+	hci_dev_unlock(hdev);
 	hci_req_complete(hdev, HCI_OP_WRITE_SCAN_ENABLE, status);
 }
 
