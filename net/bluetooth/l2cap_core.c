@@ -498,7 +498,7 @@ static void __l2cap_chan_add(struct l2cap_conn *conn, struct sock *sk)
 	BT_DBG("conn %p, psm 0x%2.2x, dcid 0x%4.4x", conn,
 			l2cap_pi(sk)->psm, l2cap_pi(sk)->dcid);
 
-	conn->disc_reason = 0x13;
+	conn->disc_reason = HCI_ERROR_REMOTE_USER_TERM;
 
 	l2cap_pi(sk)->conn = conn;
 
@@ -1170,7 +1170,7 @@ static struct l2cap_conn *l2cap_conn_add(struct hci_conn *hcon, u8 status)
 		setup_timer(&conn->info_timer, l2cap_info_timeout,
 						(unsigned long) conn);
 
-	conn->disc_reason = 0x13;
+	conn->disc_reason = HCI_ERROR_REMOTE_USER_TERM;
 
 	return conn;
 }
@@ -7510,7 +7510,7 @@ static int l2cap_disconn_ind(struct hci_conn *hcon)
 	BT_DBG("hcon %p", hcon);
 
 	if (hcon->type != ACL_LINK || !conn)
-		return 0x13;
+		return HCI_ERROR_REMOTE_USER_TERM;
 
 	return conn->disc_reason;
 }

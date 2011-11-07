@@ -272,6 +272,13 @@ enum {
 #define HCI_PACKET_BASED_FLOW_CTL_MODE	0x00
 #define HCI_BLOCK_BASED_FLOW_CTL_MODE	0x01
 
+/* ---- HCI Error Codes ---- */
+#define HCI_ERROR_AUTH_FAILURE		0x05
+#define HCI_ERROR_REJ_BAD_ADDR		0x0f
+#define HCI_ERROR_REMOTE_USER_TERM	0x13
+#define HCI_ERROR_LOCAL_HOST_TERM	0x16
+#define HCI_ERROR_PAIRING_NOT_ALLOWED	0x18
+
 /* -----  HCI Commands ---- */
 #define HCI_OP_NOP			0x0000
 
