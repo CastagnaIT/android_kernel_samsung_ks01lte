@@ -23,14 +23,26 @@
 
 /* truncate at 1k */
 #define MDSS_MDP_BUS_FACTOR_SHIFT 10
-/* 1.5 bus fudge factor */
-#define MDSS_MDP_BUS_FUDGE_FACTOR_IB(val) (((val) / 2) * 3)
-#define MDSS_MDP_BUS_FUDGE_FACTOR_HIGH_IB(val) (val << 1)
-#define MDSS_MDP_BUS_FUDGE_FACTOR_AB(val) (val << 1)
 #define MDSS_MDP_BUS_FLOOR_BW (1600000000ULL >> MDSS_MDP_BUS_FACTOR_SHIFT)
 
-/* 1.25 clock fudge factor */
-#define MDSS_MDP_CLK_FUDGE_FACTOR(val) (((val) * 5) / 4)
+static inline u64 fudge_factor(u64 val, u32 numer, u32 denom)
+{
+	u64 result = (val * (u64)numer);
+	do_div(result, denom);
+	return result;
+}
+
+#define AB_FUDGE_FACTOR(val)		fudge_factor((val),		\
+	(mdss_res->ab_factor.numer), (mdss_res->ab_factor.denom))
+
+#define IB_FUDGE_FACTOR(val)		fudge_factor((val),		\
+	(mdss_res->ib_factor.numer), (mdss_res->ib_factor.denom))
+
+#define HIGH_IB_FUDGE_FACTOR(val)	fudge_factor((val),		\
+	(mdss_res->high_ib_factor.numer), (mdss_res->high_ib_factor.denom))
+
+#define CLK_FUDGE_FACTOR(val)		fudge_factor((val),		\
+	(mdss_res->clk_factor.numer), (mdss_res->clk_factor.denom))
 
 enum {
 	MDSS_MDP_PERF_UPDATE_SKIP,
@@ -70,7 +82,7 @@ static inline u32 mdss_mdp_clk_fudge_factor(struct mdss_mdp_mixer *mixer,
 { 
      struct mdss_panel_info *pinfo = &mixer->ctl->panel_data->panel_info; 
  
-     rate = MDSS_MDP_CLK_FUDGE_FACTOR(rate); 
+     rate = CLK_FUDGE_FACTOR(rate); 
  
      /* 
         * If the panel is video mode and its back porch period is 
@@ -79,7 +91,7 @@ static inline u32 mdss_mdp_clk_fudge_factor(struct mdss_mdp_mixer *mixer,
         */ 
      if (mixer->ctl->is_video_mode && pinfo && 
          (pinfo->lcdc.v_back_porch < MDP_MIN_VBP)) 
-            rate = MDSS_MDP_CLK_FUDGE_FACTOR(rate); 
+            rate = CLK_FUDGE_FACTOR(rate); 
  
      return rate; 
 } 
@@ -140,18 +152,18 @@ static void __mdss_mdp_ctrl_perf_ovrd(struct mdss_data_type *mdata,
 
 #if !defined(CONFIG_FB_MSM_MIPI_SAMSUNG_OCTA_CMD_FULL_HD_PT_PANEL) && !defined (CONFIG_FB_MSM_MIPI_SAMSUNG_OCTA_CMD_WQHD_PT_PANEL)\
 	&& !defined(CONFIG_FB_MSM_MIPI_SAMSUNG_YOUM_CMD_FULL_HD_PT_PANEL)
-	*ab_quota = MDSS_MDP_BUS_FUDGE_FACTOR_AB(*ab_quota);
+	*ab_quota = AB_FUDGE_FACTOR(*ab_quota);
 	if (npipe > 1)
-		*ib_quota = MDSS_MDP_BUS_FUDGE_FACTOR_HIGH_IB(*ib_quota);
+		*ib_quota = HIGH_IB_FUDGE_FACTOR(*ib_quota);
 	else
-		*ib_quota = MDSS_MDP_BUS_FUDGE_FACTOR_IB(*ib_quota);
+		*ib_quota = IB_FUDGE_FACTOR(*ib_quota);
 #elif defined(CONFIG_VIDEO_MHL_V2)
 	if (hdmi_hpd_status()) {
-		*ab_quota = MDSS_MDP_BUS_FUDGE_FACTOR_AB(*ab_quota);
+		*ab_quota = AB_FUDGE_FACTOR(*ab_quota);
 		if (npipe > 1)
-			*ib_quota = MDSS_MDP_BUS_FUDGE_FACTOR_HIGH_IB(*ib_quota);
+			*ib_quota = HIGH_IB_FUDGE_FACTOR(*ib_quota);
 		else
-			*ib_quota = MDSS_MDP_BUS_FUDGE_FACTOR_IB(*ib_quota);
+			*ib_quota = IB_FUDGE_FACTOR(*ib_quota);
 	}
 #endif
 	if (ovrd && (*ib_quota < MDSS_MDP_BUS_FLOOR_BW)) {
@@ -204,7 +216,7 @@ static int mdss_mdp_ctl_perf_commit(struct mdss_data_type *mdata, u32 flags)
 	}
 
 	if (flags & MDSS_MDP_PERF_UPDATE_CLK) {
-		//clk_rate = MDSS_MDP_CLK_FUDGE_FACTOR(clk_rate);
+		//clk_rate = CLK_FUDGE_FACTOR(clk_rate);
 		pr_debug("update clk rate = %lu HZ\n", clk_rate);
 		mdss_mdp_set_clk_rate(clk_rate);
 	}
@@ -342,7 +354,7 @@ static void mdss_mdp_perf_mixer_update(struct mdss_mdp_mixer *mixer,
 		//Qualcomm patch modification     
 		//if ((pinfo && pinfo->lcdc.v_back_porch < MDP_MIN_VBP)
 		//		&& (pinfo->type == MIPI_VIDEO_PANEL))
-		//	*clk_rate = MDSS_MDP_CLK_FUDGE_FACTOR(*clk_rate);
+		//	*clk_rate = CLK_FUDGE_FACTOR(*clk_rate);
                *clk_rate = mdss_mdp_clk_fudge_factor(mixer, *clk_rate);
 		//above Qualcomm patch modify      
 		if (!pinfo) {
