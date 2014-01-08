@@ -56,7 +56,7 @@ struct cpufreq_interactive_cpuinfo {
 	struct rw_semaphore enable_sem;
 	int governor_enabled;
 	int prev_load;
-	int minfreq_boost;
+	bool minfreq_boosted;
 };
 
 static DEFINE_PER_CPU(struct cpufreq_interactive_cpuinfo, cpuinfo);
@@ -256,11 +256,15 @@ static void cpufreq_interactive_timer_resched(
  * The cpu_timer and cpu_slack_timer must be deactivated when calling this
  * function.
  */
-static void cpufreq_interactive_timer_start(int cpu)
+static void cpufreq_interactive_timer_start(int cpu, int time_override)
 {
 	struct cpufreq_interactive_cpuinfo *pcpu = &per_cpu(cpuinfo, cpu);
-	unsigned long expires = jiffies + usecs_to_jiffies(timer_rate);
 	unsigned long flags;
+	unsigned long expires;
+	if (time_override)
+		expires = jiffies + time_override;
+	else
+		expires = jiffies + usecs_to_jiffies(timer_rate);
 
 	pcpu->cpu_timer.expires = expires;
 	del_timer_sync(&pcpu->cpu_timer);
@@ -691,16 +695,14 @@ static void cpufreq_interactive_timer(unsigned long data)
 	 * Do not scale below floor_freq unless we have been at or above the
 	 * floor frequency for the minimum sample time since last validated.
 	 */
-	if (sampling_down_factor && pcpu->policy->cur == pcpu->policy->max){
+	if (sampling_down_factor && pcpu->policy->cur == pcpu->policy->max)
 		mod_min_sample_time = sampling_down_factor;
-		pcpu->minfreq_boost=0;
-	}
 	else
 		mod_min_sample_time = min_sample_time;
 
-	if (pcpu->minfreq_boost) {
+	if (pcpu->minfreq_boosted) {
 		mod_min_sample_time = 0;
-		pcpu->minfreq_boost = 0;
+		pcpu->minfreq_boosted = false;
 	}
 	if (new_freq < pcpu->floor_freq) {
 		if (now - pcpu->floor_validate_time < mod_min_sample_time) {
@@ -1732,7 +1734,7 @@ static int cpufreq_governor_interactive(struct cpufreq_policy *policy,
 			down_write(&pcpu->enable_sem);
 			del_timer_sync(&pcpu->cpu_timer);
 			del_timer_sync(&pcpu->cpu_slack_timer);
-			cpufreq_interactive_timer_start(j);
+			cpufreq_interactive_timer_start(j, 0);
 			pcpu->governor_enabled = 1;
 			up_write(&pcpu->enable_sem);
 		}
@@ -1804,18 +1806,30 @@ static int cpufreq_governor_interactive(struct cpufreq_policy *policy,
 			/* update target_freq firstly */
 			if (policy->max < pcpu->target_freq)
 				pcpu->target_freq = policy->max;
-			else if (policy->min > pcpu->target_freq){
+			if (policy->min >= pcpu->target_freq) {
 				pcpu->target_freq = policy->min;
-
-			/* Reschedule timer.
-+			 * The governor needs more time to evaluate
-+			 * the load after changing policy parameters
-			 */
+				/* Reschedule timer.
+				 * The governor needs more time to evaluate
+				 * the load after changing policy parameters
+				 */
 				del_timer_sync(&pcpu->cpu_timer);
 				del_timer_sync(&pcpu->cpu_slack_timer);
-				cpufreq_interactive_timer_start(j);
+				cpufreq_interactive_timer_start(j, 0);
+			} else {
+				/* Reschedule timer.
+				 * Delete the timers, else the timer callback
+				 * may return without re-arm the timer when
+				 * failed to acquire the semaphore. This race
+				 * may cause timer stopped unexpectedly.
+				 */
+				del_timer_sync(&pcpu->cpu_timer);
+				del_timer_sync(&pcpu->cpu_slack_timer);
+				if (pcpu->cpu_timer.expires - jiffies > 1)
+					cpufreq_interactive_timer_start(j, 0);
+				else
+					cpufreq_interactive_timer_start(j, 1);
 			}
-			pcpu->minfreq_boost = 1;
+			pcpu->minfreq_boosted = true;
 			up_write(&pcpu->enable_sem);
 		}
 		break;
