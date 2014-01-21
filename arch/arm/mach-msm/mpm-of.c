@@ -1,4 +1,4 @@
-/* Copyright (c) 2010-2013, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2010-2014, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -32,13 +32,13 @@
 #include <linux/power_supply.h>
 #include <linux/regulator/consumer.h>
 #include <linux/workqueue.h>
+#include <linux/mutex.h>
 #include <asm/hardware/gic.h>
 #include <asm/arch_timer.h>
 #include <mach/gpio.h>
 #include <mach/mpm.h>
 #include <mach/clk.h>
 #include <mach/rpm-regulator-smd.h>
-#include <linux/mutex.h>
 
 static DEFINE_MUTEX(enable_xo_mutex);
 
@@ -577,7 +577,6 @@ void msm_mpm_exit_sleep(bool from_idle)
 static void msm_mpm_sys_low_power_modes(bool allow)
 {
 	mutex_lock(&enable_xo_mutex);
-
 	if (allow) {
 		if (xo_enabled) {
 			clk_disable_unprepare(xo_clk);
