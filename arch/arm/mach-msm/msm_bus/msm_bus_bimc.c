@@ -1882,16 +1882,16 @@ static void msm_bus_bimc_config_master(
 {
 	int mode, i, ports;
 	struct msm_bus_bimc_info *binfo;
-	uint64_t bw;
+	uint64_t bw = 0;
 
 	binfo = (struct msm_bus_bimc_info *)fab_pdata->hw_data;
 	ports = info->node_info->num_mports;
 
 	/**
-	 * Here check the details of dual configuration.
-	 * Take actions based on different modes.
-	 * Check for threshold if limiter mode, etc.
-	 */
+	* Here check the details of dual configuration.
+	* Take actions based on different modes.
+	* Check for threshold if limiter mode, etc.
+	*/
 
 	if (req_clk <= info->node_info->th[0]) {
 		mode = info->node_info->mode;
@@ -2033,6 +2033,7 @@ static int msm_bus_bimc_commit(struct msm_bus_fabric_registration
 	msm_bus_remote_hw_commit(fab_pdata, hw_data, cdata);
 	return 0;
 }
+
 
 static void bimc_init_mas_reg(struct msm_bus_bimc_info *binfo,
 	struct msm_bus_inode_info *info,

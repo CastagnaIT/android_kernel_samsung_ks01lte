@@ -306,10 +306,10 @@ static u64 *get_th_params(struct platform_device *pdev,
 	for (i = 0; i < *nports; i++)
 		ret_arr[i] = (uint64_t)KBTOB(arr[i]);
 
-	pr_info("%s: num entries %d prop %s", __func__, *nports, prop);
+	MSM_BUS_DBG("%s: num entries %d prop %s", __func__, *nports, prop);
 
 	for (i = 0; i < *nports; i++)
-		pr_info("Th %d val %llu", i, ret_arr[i]);
+		MSM_BUS_DBG("Th %d val %llu", i, ret_arr[i]);
 
 	devm_kfree(&pdev->dev, arr);
 	return ret_arr;
@@ -401,6 +401,7 @@ static struct msm_bus_node_info *get_nodes(struct device_node *of_node,
 		of_property_read_u32(child_node, "qcom,buswidth",
 			&info[i].buswidth);
 		of_property_read_u32(child_node, "qcom,ws", &info[i].ws);
+
 		info[i].dual_conf =
 			of_property_read_bool(child_node, "qcom,dual-conf");
 
@@ -441,7 +442,7 @@ static struct msm_bus_node_info *get_nodes(struct device_node *of_node,
 		}
 
 		ret = of_property_read_string(child_node, "qcom,mode",
-			&sel_str);
+				&sel_str);
 		if (ret)
 			info[i].mode = 0;
 		else {
