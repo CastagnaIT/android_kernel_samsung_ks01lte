@@ -1523,6 +1523,7 @@ struct xhci_hcd {
 #define XHCI_SPURIOUS_REBOOT	(1 << 13)
 #define XHCI_COMP_MODE_QUIRK	(1 << 14)
 #define XHCI_AVOID_BEI		(1 << 15)
+#define XHCI_PLAT		(1 << 16)
 
 #define XHCI_PORTSC_DELAY	(1 << 20) /* codeauora patch--changed bit from 10 to 20 for compatibility with other linux branch patches */
 /*
@@ -1840,6 +1841,7 @@ int xhci_cancel_cmd(struct xhci_hcd *xhci, struct xhci_command *command,
 		union xhci_trb *cmd_trb);
 void xhci_ring_ep_doorbell(struct xhci_hcd *xhci, unsigned int slot_id,
 		unsigned int ep_index, unsigned int stream_id);
+union xhci_trb *xhci_find_next_enqueue(struct xhci_ring *ring);
 
 /* xHCI roothub code */
 void xhci_set_link_state(struct xhci_hcd *xhci, __le32 __iomem **port_array,
