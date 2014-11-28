@@ -24,6 +24,10 @@
 #include <linux/io.h>
 #include "ram_console.h"
 
+#ifndef CONFIG_PRINTK
+#define dmesg_restrict	0
+#endif
+
 static struct persistent_ram_zone *ram_console_zone;
 static const char *bootinfo;
 static size_t bootinfo_size;
@@ -49,46 +53,6 @@ void ram_console_enable_console(int enabled)
 	else
 		ram_console.flags &= ~CON_ENABLED;
 }
-
-static int __devinit ram_console_probe(struct platform_device *pdev)
-{
-	struct ram_console_platform_data *pdata = pdev->dev.platform_data;
-	struct persistent_ram_zone *prz;
-
-	prz = persistent_ram_init_ringbuffer(&pdev->dev, true);
-	if (IS_ERR(prz))
-		return PTR_ERR(prz);
-
-
-	if (pdata) {
-		bootinfo = kstrdup(pdata->bootinfo, GFP_KERNEL);
-		if (bootinfo)
-			bootinfo_size = strlen(bootinfo);
-	}
-
-	ram_console_zone = prz;
-	ram_console.data = prz;
-
-	register_console(&ram_console);
-
-	return 0;
-}
-
-static struct platform_driver ram_console_driver = {
-	.driver		= {
-		.name	= "ram_console",
-	},
-	.probe = ram_console_probe,
-};
-
-static int __init ram_console_module_init(void)
-{
-	return platform_driver_register(&ram_console_driver);
-}
-
-#ifndef CONFIG_PRINTK
-#define dmesg_restrict	0
-#endif
 
 static ssize_t ram_console_read_old(struct file *file, char __user *buf,
 				    size_t len, loff_t *offset)
@@ -150,12 +114,30 @@ static const struct file_operations ram_console_file_ops = {
 	.read = ram_console_read_old,
 };
 
-static int __init ram_console_late_init(void)
+static int __devinit ram_console_probe(struct platform_device *pdev)
 {
+	struct ram_console_platform_data *pdata = pdev->dev.platform_data;
+	struct persistent_ram_zone *prz;
 	struct proc_dir_entry *entry;
-	struct persistent_ram_zone *prz = ram_console_zone;
 
-	if (!prz)
+	pdev->dev.init_name = "ram_console";
+	prz = persistent_ram_init_ringbuffer(&pdev->dev, true);
+	if (IS_ERR(prz))
+		return PTR_ERR(prz);
+
+
+	if (pdata) {
+		bootinfo = kstrdup(pdata->bootinfo, GFP_KERNEL);
+		if (bootinfo)
+			bootinfo_size = strlen(bootinfo);
+	}
+
+	ram_console_zone = prz;
+	ram_console.data = prz;
+
+	register_console(&ram_console);
+
+	if (!ram_console_zone)
 		return 0;
 
 	if (persistent_ram_old_size(prz) == 0)
@@ -176,5 +158,17 @@ static int __init ram_console_late_init(void)
 	return 0;
 }
 
-late_initcall(ram_console_late_init);
-postcore_initcall(ram_console_module_init);
+static struct of_device_id msm_ramconsole_match_table[] = {
+	{.compatible = "ram_console"},
+	{},
+};
+MODULE_DEVICE_TABLE(of, msm_ramconsole_match_table);
+
+static struct platform_driver ram_console_driver = {
+	.driver		= {
+		.name	= "ram_console",
+		.of_match_table = msm_ramconsole_match_table,
+	},
+	.probe = ram_console_probe,
+};
+module_platform_driver(ram_console_driver);
