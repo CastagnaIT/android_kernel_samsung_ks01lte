@@ -145,8 +145,9 @@ static struct wcd9xxx_mbhc_config mbhc_cfg = {
 #if (defined(CONFIG_MACH_KLTE_KOR) || defined(CONFIG_MACH_KLTE_JPN)) && !defined(CONFIG_SEC_FACTORY)
 	.cs_enable_flags = (1 << MBHC_CS_ENABLE_POLLING),
 #else
-	.cs_enable_flags = 0,
+	.cs_enable_flags = (1 << MBHC_CS_ENABLE_POLLING | 1 << MBHC_CS_ENABLE_DET_ANC),
 #endif
+
 	.do_recalibration = false,
 	.use_vddio_meas = true,
 	.enable_anc_mic_detect = false,
