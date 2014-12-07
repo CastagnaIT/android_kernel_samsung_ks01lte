@@ -1522,25 +1522,22 @@ static void cypress_request_gpio(struct cypress_touchkey_platform_data *pdata)
 	if (ret) {
 		printk(KERN_ERR "%s: unable to request touchkey_scl [%d]\n",
 				__func__, pdata->gpio_scl);
-		return;
+	} else {
+		gpio_tlmm_config(GPIO_CFG(pdata->gpio_scl, 3, GPIO_CFG_OUTPUT, GPIO_CFG_NO_PULL, GPIO_CFG_2MA), 1);
 	}
-
-	gpio_tlmm_config(GPIO_CFG(pdata->gpio_scl, 3, GPIO_CFG_OUTPUT, GPIO_CFG_NO_PULL, GPIO_CFG_2MA), 1);
 
 	ret = gpio_request(pdata->gpio_sda, "touchkey_sda");
 	if (ret) {
 		printk(KERN_ERR "%s: unable to request touchkey_sda [%d]\n",
 				__func__, pdata->gpio_sda);
-		return;
+	} else {
+		gpio_tlmm_config(GPIO_CFG(pdata->gpio_sda, 3, GPIO_CFG_OUTPUT, GPIO_CFG_NO_PULL, GPIO_CFG_2MA), 1);
 	}
-
-	gpio_tlmm_config(GPIO_CFG(pdata->gpio_sda, 3, GPIO_CFG_OUTPUT, GPIO_CFG_NO_PULL, GPIO_CFG_2MA), 1);
 
 	ret = gpio_request(pdata->gpio_int, "touchkey_irq");
 	if (ret) {
 		printk(KERN_ERR "%s: unable to request touchkey_irq [%d]\n",
 				__func__, pdata->gpio_int);
-		return;
 	}
 
 	if (pdata->vdd_led > 0) {
@@ -1548,7 +1545,6 @@ static void cypress_request_gpio(struct cypress_touchkey_platform_data *pdata)
 		if (ret) {
 			printk(KERN_ERR "%s: unable to request touchkey_vdd_led [%d]\n",
 					__func__, pdata->vdd_led);
-			return;
 		}
 	}
 }
