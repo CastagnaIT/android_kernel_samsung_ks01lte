@@ -47,6 +47,7 @@ struct cpu_load_data {
 	cputime64_t prev_cpu_wall;
 	cputime64_t prev_cpu_iowait;
 	unsigned int avg_load_maxfreq;
+	unsigned int cur_load_maxfreq;
 	unsigned int samples;
 	unsigned int window_size;
 	unsigned int cur_freq;
@@ -122,7 +123,7 @@ static int update_average_load(unsigned int freq, unsigned int cpu)
 	return 0;
 }
 
-static unsigned int report_load_at_max_freq(void)
+static int report_load_at_max_freq(void)
 {
 	int cpu;
 	struct cpu_load_data *pcpu;
@@ -133,9 +134,11 @@ static unsigned int report_load_at_max_freq(void)
 		mutex_lock(&pcpu->cpu_load_mutex);
 		update_average_load(pcpu->cur_freq, cpu);
 		total_load += pcpu->avg_load_maxfreq;
+		pcpu->cur_load_maxfreq = pcpu->avg_load_maxfreq;
 		pcpu->avg_load_maxfreq = 0;
 		mutex_unlock(&pcpu->cpu_load_mutex);
 	}
+
 	return total_load;
 }
 
