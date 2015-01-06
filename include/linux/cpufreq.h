@@ -321,7 +321,7 @@ __ATTR(_name, 0644, show_##_name, store_##_name)
 /*********************************************************************
  *                        CPUFREQ 2.6. INTERFACE                     *
  *********************************************************************/
-cputime64_t get_cpu_idle_time(unsigned int cpu, cputime64_t *wall, int io_busy);
+extern cputime64_t get_cpu_idle_time(unsigned int cpu, cputime64_t *wall, int io_busy);
 int cpufreq_get_policy(struct cpufreq_policy *policy, unsigned int cpu);
 int cpufreq_update_policy(unsigned int cpu);
 
