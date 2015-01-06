@@ -4190,6 +4190,12 @@ config MSM_DCVS
 	  algorithm and the algorithm returns a frequency for the core which is
 	  passed to the frequency change driver.
 
+config INTELLI_HOTPLUG
+	bool "Enable intelli-plug cpu hotplug driver"
+	default y
+	help
+	  Generic Intelli-plug cpu hotplug driver for ARM SOCs
+
 config MSM_HOTPLUG
 	bool "MSM hotplug driver"
 	depends on HOTPLUG_CPU
