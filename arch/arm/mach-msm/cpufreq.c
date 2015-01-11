@@ -48,7 +48,7 @@ static struct clk *cpu_clk[NR_CPUS];
 static struct clk *l2_clk;
 static unsigned int freq_index[NR_CPUS];
 static unsigned int max_freq_index;
-static struct cpufreq_frequency_table *freq_table;
+struct cpufreq_frequency_table *freq_table;
 static unsigned int *l2_khz;
 static bool is_clk;
 static bool is_sync;
