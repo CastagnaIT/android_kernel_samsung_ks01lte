@@ -459,6 +459,8 @@ struct cpufreq_frequency_table {
 				    * order */
 };
 
+extern struct cpufreq_frequency_table *freq_table;
+
 int cpufreq_frequency_table_cpuinfo(struct cpufreq_policy *policy,
 				    struct cpufreq_frequency_table *table);
 
@@ -483,6 +485,5 @@ void cpufreq_frequency_table_get_attr(struct cpufreq_frequency_table *table,
 				      unsigned int cpu);
 
 void cpufreq_frequency_table_put_attr(unsigned int cpu);
-
 
 #endif /* _LINUX_CPUFREQ_H */

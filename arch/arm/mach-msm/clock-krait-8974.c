@@ -18,6 +18,7 @@
 #include <linux/ctype.h>
 #include <linux/io.h>
 #include <linux/clk.h>
+#include <linux/cpufreq.h>
 #include <linux/regulator/consumer.h>
 #include <linux/of.h>
 #include <linux/cpumask.h>
@@ -794,47 +795,91 @@ static struct platform_driver clock_krait_8974_driver = {
 	},
 };
 
+#define MAX_VDD 1200000
+#define MIN_VDD 500000
+
+bool freq_used_for_scaling(unsigned int frequency_khz) {
+	unsigned int i;
+	bool ret = false;
+
+	if (!freq_table)
+		goto exit;
+
+	for (i = 0; freq_table[i].frequency != CPUFREQ_TABLE_END; i++) {
+		if (freq_table[i].frequency == frequency_khz) {
+			/* pr_info("Frequency (%u KHz) used for scaling\n", freq_table[i].frequency); */
+			ret = true;
+			break;
+		}
+	}
+
+	exit:
+	return ret;
+}
+
 ssize_t vc_get_vdd(char *buf)
 {
 	struct clk_vdd_class *vdd = krait0_clk.c.vdd_class;
-        int i, len = 0;
+	int i, len = 0;
 	int levels = vdd->num_levels;
 
-        if (buf) {
-                for(i=1; i < levels; i++) {
-                        len += sprintf(buf + len, "%umhz: %d mV\n",
-				(unsigned int)krait0_clk.c.fmax[i]/1000000,
-                                vdd->vdd_uv[i]/1000 );
-                }
-        }
-        return len;
+	if (buf) {
+		for(i=1; i < levels; i++) {
+			if (freq_used_for_scaling(
+					(unsigned int) krait0_clk.c.fmax[i] / 1000)) {
+				len += sprintf(buf + len, "%umhz: %d mV\n",
+						(unsigned int)krait0_clk.c.fmax[i]/1000000,
+							vdd->vdd_uv[i]/1000 );
+			}
+		}
+	}
+
+	return len;
 }
-void vc_set_vdd(const char *buf)
+
+ssize_t vc_set_vdd(const char *buf)
 {
 	struct clk_vdd_class *vdd0 = krait0_clk.c.vdd_class;
 	struct clk_vdd_class *vdd1 = krait1_clk.c.vdd_class;
 	struct clk_vdd_class *vdd2 = krait2_clk.c.vdd_class;
 	struct clk_vdd_class *vdd3 = krait3_clk.c.vdd_class;
-        int ret, i;
-        char size_cur[16];
-        unsigned int volt;
+	int ret = 0;
+	int i;
+	char size_cur[16];
+	unsigned int volt;
 	int levels = vdd0->num_levels;
 
-        for(i=1; i < levels; i++) {
-            ret = sscanf(buf, "%d", &volt);
-            pr_info("[imoseyon]: voltage for %lu changed to %d\n",
-		krait0_clk.c.fmax[i]/1000, volt*1000);
-            vdd0->vdd_uv[i] = min(max((unsigned int)volt*1000,
-                (unsigned int)600000), (unsigned int)1350000);
-            vdd1->vdd_uv[i] = min(max((unsigned int)volt*1000,
-                (unsigned int)600000), (unsigned int)1350000);
-            vdd2->vdd_uv[i] = min(max((unsigned int)volt*1000,
-                (unsigned int)600000), (unsigned int)1350000);
-            vdd3->vdd_uv[i] = min(max((unsigned int)volt*1000,
-                (unsigned int)600000), (unsigned int)1350000);
-            ret = sscanf(buf, "%s", size_cur);
-            buf += (strlen(size_cur)+1);
-        }
+	if (!buf)
+		return -EINVAL;
+
+	for(i=1; i < levels; i++) {
+		if (!freq_used_for_scaling(
+					(unsigned int) krait0_clk.c.fmax[i] / 1000))
+			continue;
+
+		ret = sscanf(buf, "%d", &volt);
+		volt = (unsigned int) volt * 1000;
+
+		if (volt > MAX_VDD) {
+			volt = MAX_VDD;
+		} else if (volt < MIN_VDD) {
+			volt = MIN_VDD;
+		}
+
+		pr_info("Voltage for (%lu KHz) changed from %dmV to %dmV\n",
+				krait0_clk.c.fmax[i] / 1000,
+					(unsigned int) vdd0->vdd_uv[i] / 1000, volt / 1000);
+
+		vdd0->vdd_uv[i] = volt;
+		vdd1->vdd_uv[i] = volt;
+		vdd2->vdd_uv[i] = volt;
+		vdd3->vdd_uv[i] = volt;
+
+		ret = sscanf(buf, "%s", size_cur);
+		buf += (strlen(size_cur)+1);
+	}
+
+	return ret;
 }
 
 static int __init clock_krait_8974_init(void)
