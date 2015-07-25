@@ -1242,7 +1242,7 @@ void hci_conn_hash_flush(struct hci_dev *hdev, u8 is_process)
 
 		c->state = BT_CLOSED;
 
-		hci_proto_disconn_cfm(c, 0x16, is_process);
+		hci_proto_disconn_cfm(c, HCI_ERROR_LOCAL_HOST_TERM, is_process);
 		hci_conn_del(c);
 	}
 }
