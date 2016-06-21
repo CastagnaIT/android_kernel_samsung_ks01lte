@@ -21,6 +21,7 @@
 #define SHORT_BATTERY_STANDARD	100
 #if defined(CONFIG_USB_SWITCH_FSA9485)
 extern int mhl_connection_state(void);
+extern void fsa9485_mmdock_vbus_check(bool vbus_status);
 #endif
 
 #if defined(CONFIG_EXTCON)
@@ -939,30 +940,30 @@ static sec_bat_adc_table_data_t chg_temp_table[] = {
 #define TEMP_LOW_THRESHOLD_LPM		-50
 #define TEMP_LOW_RECOVERY_LPM		0
 #elif defined (CONFIG_MACH_KLTE_JPN)
-#define TEMP_HIGH_THRESHOLD_EVENT	600
-#define TEMP_HIGH_RECOVERY_EVENT		460
+#define TEMP_HIGH_THRESHOLD_EVENT	580
+#define TEMP_HIGH_RECOVERY_EVENT		530
 #define TEMP_LOW_THRESHOLD_EVENT		-50
 #define TEMP_LOW_RECOVERY_EVENT		0
-#define TEMP_HIGH_THRESHOLD_NORMAL	600
-#define TEMP_HIGH_RECOVERY_NORMAL	460
+#define TEMP_HIGH_THRESHOLD_NORMAL	580
+#define TEMP_HIGH_RECOVERY_NORMAL	530
 #define TEMP_LOW_THRESHOLD_NORMAL	-50
 #define TEMP_LOW_RECOVERY_NORMAL	0
-#define TEMP_HIGH_THRESHOLD_LPM		600
-#define TEMP_HIGH_RECOVERY_LPM		460
+#define TEMP_HIGH_THRESHOLD_LPM		580
+#define TEMP_HIGH_RECOVERY_LPM		530
 #define TEMP_LOW_THRESHOLD_LPM		-50
 #define TEMP_LOW_RECOVERY_LPM		0
 #elif defined(CONFIG_SEC_K_PROJECT) || defined(CONFIG_SEC_KACTIVE_PROJECT) || \
 	defined(CONFIG_SEC_LOCALE_CHN)
-#define TEMP_HIGH_THRESHOLD_EVENT	600
-#define TEMP_HIGH_RECOVERY_EVENT		460
+#define TEMP_HIGH_THRESHOLD_EVENT	580
+#define TEMP_HIGH_RECOVERY_EVENT		530
 #define TEMP_LOW_THRESHOLD_EVENT		-50
 #define TEMP_LOW_RECOVERY_EVENT		0
-#define TEMP_HIGH_THRESHOLD_NORMAL	600
-#define TEMP_HIGH_RECOVERY_NORMAL	460
+#define TEMP_HIGH_THRESHOLD_NORMAL	580
+#define TEMP_HIGH_RECOVERY_NORMAL	530
 #define TEMP_LOW_THRESHOLD_NORMAL	-50
 #define TEMP_LOW_RECOVERY_NORMAL	0
-#define TEMP_HIGH_THRESHOLD_LPM		600
-#define TEMP_HIGH_RECOVERY_LPM		460
+#define TEMP_HIGH_THRESHOLD_LPM		580
+#define TEMP_HIGH_RECOVERY_LPM		530
 #define TEMP_LOW_THRESHOLD_LPM		-50
 #define TEMP_LOW_RECOVERY_LPM		0
 #elif defined(CONFIG_MACH_HLTESKT) || defined(CONFIG_MACH_HLTEKTT) || defined(CONFIG_MACH_HLTELGT)
@@ -1389,6 +1390,41 @@ static sec_bat_adc_table_data_t chg_temp_table[] = {
 #define TEMP_LOW_THRESHOLD_LPM		-50
 #define TEMP_LOW_RECOVERY_LPM		0
 #endif
+
+#if defined(CONFIG_BATTERY_SWELLING)
+#if defined(CONFIG_MACH_KACTIVELTE_KOR)
+#define BATT_SWELLING_HIGH_TEMP_BLOCK			450
+#define BATT_SWELLING_HIGH_TEMP_RECOV			400
+#define BATT_SWELLING_LOW_TEMP_BLOCK			100
+#define BATT_SWELLING_LOW_TEMP_RECOV			150
+#define BATT_SWELLING_HIGH_CHG_CURRENT			1400
+#define BATT_SWELLING_LOW_CHG_CURRENT			1000
+#define BATT_SWELLING_DROP_FLOAT_VOLTAGE		4200
+#define BATT_SWELLING_HIGH_RECHG_VOLTAGE		4150
+#define BATT_SWELLING_LOW_RECHG_VOLTAGE			4050
+#elif defined(CONFIG_SEC_K_PROJECT)
+#define BATT_SWELLING_HIGH_TEMP_BLOCK			500
+#define BATT_SWELLING_HIGH_TEMP_RECOV			450
+#define BATT_SWELLING_LOW_TEMP_BLOCK			50
+#define BATT_SWELLING_LOW_TEMP_RECOV			100
+#define BATT_SWELLING_HIGH_CHG_CURRENT			0
+#define BATT_SWELLING_LOW_CHG_CURRENT			1400
+#define BATT_SWELLING_DROP_FLOAT_VOLTAGE		4200
+#define BATT_SWELLING_HIGH_RECHG_VOLTAGE		4150
+#define BATT_SWELLING_LOW_RECHG_VOLTAGE			4050
+#else
+#define BATT_SWELLING_HIGH_TEMP_BLOCK			450
+#define BATT_SWELLING_HIGH_TEMP_RECOV			400
+#define BATT_SWELLING_LOW_TEMP_BLOCK			100
+#define BATT_SWELLING_LOW_TEMP_RECOV			150
+#define BATT_SWELLING_HIGH_CHG_CURRENT			0
+#define BATT_SWELLING_LOW_CHG_CURRENT			0
+#define BATT_SWELLING_DROP_FLOAT_VOLTAGE		4200
+#define BATT_SWELLING_HIGH_RECHG_VOLTAGE		4150
+#define BATT_SWELLING_LOW_RECHG_VOLTAGE			4050
+#endif
+#endif //CONFIG_BATTERY_SWELLING
+
 #endif //CONFIG_BATTERY_SAMSUNG_DATA
 
 #if defined(CONFIG_MACH_MONDRIAN)
@@ -1858,6 +1894,12 @@ int sec_bat_check_cable_callback(struct sec_battery_info *battery)
 {
 	union power_supply_propval value;
 
+#ifdef CONFIG_USB_SWITCH_FSA9485
+	bool ta_status;
+	ta_status = gpio_get_value_cansleep(battery->pdata->ta_irq_gpio) ? false : true;
+	fsa9485_mmdock_vbus_check(ta_status);
+#endif
+
 	if (battery->pdata->ta_irq_gpio == 0) {
 		pr_err("%s: ta_int_gpio is 0 or not assigned yet(cable_type(%d))\n",
 			__func__, current_cable_type);
@@ -1949,10 +1991,13 @@ void board_battery_init(struct platform_device *pdev, struct sec_battery_info *b
 #if defined(CONFIG_BATTERY_SWELLING)
 	battery->pdata->swelling_high_temp_block = BATT_SWELLING_HIGH_TEMP_BLOCK;
 	battery->pdata->swelling_high_temp_recov = BATT_SWELLING_HIGH_TEMP_RECOV;
-	battery->pdata->swelling_low_temp_blck = BATT_SWELLING_LOW_TEMP_BLOCK;
+	battery->pdata->swelling_low_temp_block = BATT_SWELLING_LOW_TEMP_BLOCK;
 	battery->pdata->swelling_low_temp_recov = BATT_SWELLING_LOW_TEMP_RECOV;
-	battery->pdata->swelling_rechg_voltage = BATT_SWELLING_RECHG_VOLTAGE;
-	battery->pdata->swelling_block_time = BATT_SWELLING_BLOCK_TIME;
+	battery->pdata->swelling_high_chg_current = BATT_SWELLING_HIGH_CHG_CURRENT;
+	battery->pdata->swelling_low_chg_current = BATT_SWELLING_LOW_CHG_CURRENT;
+	battery->pdata->swelling_drop_float_voltage = BATT_SWELLING_DROP_FLOAT_VOLTAGE;
+	battery->pdata->swelling_high_rechg_voltage = BATT_SWELLING_HIGH_RECHG_VOLTAGE;
+	battery->pdata->swelling_low_rechg_voltage = BATT_SWELLING_LOW_RECHG_VOLTAGE;
 #endif
 
 	adc_init_type(pdev, battery);
