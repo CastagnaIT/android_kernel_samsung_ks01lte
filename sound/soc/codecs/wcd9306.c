@@ -39,10 +39,31 @@
 #include "wcd9xxx-resmgr.h"
 #include "wcd9xxx-common.h"
 
-#define TAPAN_HPH_PA_SETTLE_COMP_ON 3000
+#define TAPAN_HPH_PA_SETTLE_COMP_ON 5000
 #define TAPAN_HPH_PA_SETTLE_COMP_OFF 13000
 
+#if defined(CONFIG_SND_SOC_ES705)
+#include "audience/es705-export.h"
+#elif defined(CONFIG_SND_SOC_ES325_ATLANTIC)
+#include "es325-export.h"
+#endif
+
+#if defined(CONFIG_SND_SOC_ES705)
+#define REMOTE_ROUTE_ENABLE_CB  es705_remote_route_enable
+#define SLIM_GET_CHANNEL_MAP_CB es705_slim_get_channel_map
+#define SLIM_SET_CHANNEL_MAP_CB es705_slim_set_channel_map
+#define SLIM_HW_PARAMS_CB       es705_slim_hw_params
+#define REMOTE_CFG_SLIM_RX_CB	es705_remote_cfg_slim_rx
+#define REMOTE_CLOSE_SLIM_RX_CB	es705_remote_close_slim_rx
+#define REMOTE_CFG_SLIM_TX_CB	es705_remote_cfg_slim_tx
+#define REMOTE_CLOSE_SLIM_TX_CB	es705_remote_close_slim_tx
+#define REMOTE_ADD_CODEC_CONTROLS_CB	es705_remote_add_codec_controls
+#endif
+
+#ifndef CONFIG_ARCH_MSM8226
 #define DAPM_MICBIAS2_EXTERNAL_STANDALONE "MIC BIAS2 External Standalone"
+#endif
+
 #define TAPAN_VALIDATE_RX_SBPORT_RANGE(port) ((port >= 16) && (port <= 20))
 #define TAPAN_CONVERT_RX_SBPORT_ID(port) (port - 16) /* RX1 port ID = 0 */
 
@@ -317,6 +338,10 @@ struct tapan_priv {
 
 	/* class h specific data */
 	struct wcd9xxx_clsh_cdc_data clsh_d;
+
+	int ldo_h_count;
+	int (*mclk_cb_fn) (struct snd_soc_codec*, int, bool);
+	int micb_2_ref_cnt;
 
 	/* pointers to regulators required for chargepump */
 	struct regulator *cp_regulators[CP_REG_MAX];
@@ -1087,6 +1112,26 @@ static const struct soc_enum class_h_dsm_enum =
 
 static const struct snd_kcontrol_new class_h_dsm_mux =
 	SOC_DAPM_ENUM("CLASS_H_DSM MUX Mux", class_h_dsm_enum);
+
+static const char * const rx1_interpolator_text[] = {
+	"ZERO", "RX1 MIX2"
+};
+
+static const struct soc_enum rx1_interpolator_enum =
+	SOC_ENUM_SINGLE(0, 0, 2, rx1_interpolator_text);
+
+static const struct snd_kcontrol_new rx1_interpolator =
+	SOC_DAPM_ENUM_VIRT("RX1 INTERPOLATOR Mux", rx1_interpolator_enum);
+
+static const char * const rx2_interpolator_text[] = {
+	"ZERO", "RX2 MIX2"
+};
+
+static const struct soc_enum rx2_interpolator_enum =
+	SOC_ENUM_SINGLE(0, 1, 2, rx2_interpolator_text);
+
+static const struct snd_kcontrol_new rx2_interpolator =
+	SOC_DAPM_ENUM_VIRT("RX2 INTERPOLATOR Mux", rx2_interpolator_enum);
 
 static int tapan_hph_impedance_get(struct snd_kcontrol *kcontrol,
 				   struct snd_ctl_elem_value *ucontrol)
@@ -1959,7 +2004,7 @@ static int tapan_codec_enable_adc(struct snd_soc_dapm_widget *w,
 				1 << init_bit_shift);
 		break;
 	case SND_SOC_DAPM_POST_PMU:
-
+		usleep_range(2000, 2010);
 		snd_soc_update_bits(codec, adc_reg, 1 << init_bit_shift, 0x00);
 
 		break;
@@ -2034,15 +2079,20 @@ static int tapan_codec_enable_lineout(struct snd_soc_dapm_widget *w,
 						 WCD9XXX_CLSH_STATE_LO,
 						 WCD9XXX_CLSH_REQ_ENABLE,
 						 WCD9XXX_CLSH_EVENT_POST_PA);
-		dev_dbg(codec->dev, "%s: sleeping 3 ms after %s PA turn on\n",
+		dev_dbg(codec->dev, "%s: sleeping 5 ms after %s PA turn on\n",
 				__func__, w->name);
-		usleep_range(3000, 3010);
+		/* Wait for CnP time after PA enable */
+		usleep_range(5000, 5100);
 		break;
 	case SND_SOC_DAPM_POST_PMD:
 		wcd9xxx_clsh_fsm(codec, &tapan->clsh_d,
 						 WCD9XXX_CLSH_STATE_LO,
 						 WCD9XXX_CLSH_REQ_DISABLE,
 						 WCD9XXX_CLSH_EVENT_POST_PA);
+		dev_dbg(codec->dev, "%s: sleeping 5 ms after %s PA turn off\n",
+				__func__, w->name);
+		/* Wait for CnP time after PA enable */
+		usleep_range(5000, 5100);
 		break;
 	}
 	return 0;
@@ -2353,6 +2403,7 @@ static int tapan_codec_enable_micbias(struct snd_soc_dapm_widget *w,
 	return 0;
 }
 
+#ifndef CONFIG_ARCH_MSM8226
 /* called under codec_resource_lock acquisition */
 static int tapan_enable_mbhc_micbias(struct snd_soc_codec *codec, bool enable,
 				     enum wcd9xxx_micbias_num micb_num)
@@ -2376,6 +2427,7 @@ static int tapan_enable_mbhc_micbias(struct snd_soc_codec *codec, bool enable,
 	pr_debug("%s: leave ret %d\n", __func__, rc);
 	return rc;
 }
+#endif
 
 static void tx_hpf_corner_freq_callback(struct work_struct *work)
 {
@@ -2398,6 +2450,7 @@ static void tx_hpf_corner_freq_callback(struct work_struct *work)
 	dev_dbg(codec->dev, "%s(): decimator %u hpf_cut_of_freq 0x%x\n",
 		 __func__, hpf_work->decimator, (unsigned int)hpf_cut_of_freq);
 
+	snd_soc_update_bits(codec, TAPAN_A_TX_1_2_TXFE_CLKDIV, 0x55, 0x55);
 	snd_soc_update_bits(codec, tx_mux_ctl_reg, 0x30, hpf_cut_of_freq << 4);
 }
 
@@ -2490,7 +2543,8 @@ static int tapan_codec_enable_dec(struct snd_soc_dapm_widget *w,
 
 		/* enable HPF */
 		snd_soc_update_bits(codec, tx_mux_ctl_reg , 0x08, 0x00);
-
+		snd_soc_update_bits(codec, TAPAN_A_TX_1_2_TXFE_CLKDIV,
+				0x55, 0x44);
 		break;
 
 	case SND_SOC_DAPM_POST_PMU:
@@ -2619,6 +2673,7 @@ static int tapan_codec_enable_interpolator(struct snd_soc_dapm_widget *w,
 	return 0;
 }
 
+#ifndef CONFIG_ARCH_MSM8226
 /* called under codec_resource_lock acquisition */
 static int __tapan_codec_enable_ldo_h(struct snd_soc_dapm_widget *w,
 				      struct snd_kcontrol *kcontrol, int event)
@@ -2672,13 +2727,97 @@ static int __tapan_codec_enable_ldo_h(struct snd_soc_dapm_widget *w,
 	pr_debug("%s: leave\n", __func__);
 	return 0;
 }
+#endif
+void tapan_register_mclk_cb(struct snd_soc_codec *codec,
+	int (*mclk_cb_fn) (struct snd_soc_codec*, int, bool))
+{
+	struct tapan_priv *tapan = snd_soc_codec_get_drvdata(codec);
+	tapan->mclk_cb_fn = mclk_cb_fn;
+}
+
+static void tapan_enable_ldo_h(struct snd_soc_codec *codec, u32 enable)
+{
+	struct tapan_priv *tapan = snd_soc_codec_get_drvdata(codec);
+
+	if (enable) {
+		if (++tapan->ldo_h_count == 1)
+			snd_soc_update_bits(codec, TAPAN_A_LDO_H_MODE_1,
+				0x80, 0x80);
+	} else {
+		if (--tapan->ldo_h_count <= 0) {
+			snd_soc_update_bits(codec, TAPAN_A_LDO_H_MODE_1,
+				0x80, 0x00);
+			tapan->ldo_h_count = 0;
+		}
+	}
+}
+
+static int tapan_codec_enable_micbias_power(struct snd_soc_dapm_widget *w,
+		struct snd_kcontrol *kcontrol,
+		int event)
+{
+	struct snd_soc_codec *codec = w->codec;
+	struct tapan_priv *tapan = snd_soc_codec_get_drvdata(codec);
+
+	pr_debug("%s %d\n", __func__, event);
+
+	if (!tapan->mclk_cb_fn) {
+		pr_err("%s: Callback to enable mclk is not registered\n",
+			   __func__);
+		return -EINVAL;
+	}
+
+	switch (event) {
+	case SND_SOC_DAPM_PRE_PMU:
+		tapan->mclk_cb_fn(codec, 1, true);
+		WCD9XXX_BCL_LOCK(&tapan->resmgr);
+		WCD9XXX_BG_CLK_LOCK(&tapan->resmgr);
+		wcd9xxx_resmgr_get_bandgap(&tapan->resmgr,
+					   WCD9XXX_BANDGAP_AUDIO_MODE);
+		WCD9XXX_BG_CLK_UNLOCK(&tapan->resmgr);
+		WCD9XXX_BCL_UNLOCK(&tapan->resmgr);
+		tapan_enable_ldo_h(codec, 1);
+		tapan_codec_enable_micbias(w, kcontrol, event);
+		break;
+	case SND_SOC_DAPM_POST_PMU:
+		tapan_codec_enable_micbias(w, kcontrol, event);
+		tapan->mclk_cb_fn(codec, 0, true);
+		break;
+	case SND_SOC_DAPM_POST_PMD:
+		tapan_codec_enable_micbias(w, kcontrol, event);
+		tapan_enable_ldo_h(codec, 0);
+		WCD9XXX_BCL_LOCK(&tapan->resmgr);
+		WCD9XXX_BG_CLK_LOCK(&tapan->resmgr);
+		wcd9xxx_resmgr_put_bandgap(&tapan->resmgr,
+					   WCD9XXX_BANDGAP_AUDIO_MODE);
+		WCD9XXX_BG_CLK_UNLOCK(&tapan->resmgr);
+		WCD9XXX_BCL_UNLOCK(&tapan->resmgr);
+		break;
+	}
+	return 0;
+}
 
 static int tapan_codec_enable_ldo_h(struct snd_soc_dapm_widget *w,
 	struct snd_kcontrol *kcontrol, int event)
 {
+#ifndef CONFIG_ARCH_MSM8226
 	int rc;
 	rc = __tapan_codec_enable_ldo_h(w, kcontrol, event);
 	return rc;
+#else
+	struct snd_soc_codec *codec = w->codec;
+	switch (event) {
+	case SND_SOC_DAPM_POST_PMU:
+		tapan_enable_ldo_h(codec, 1);
+		usleep_range(1000, 1000);
+		break;
+	case SND_SOC_DAPM_POST_PMD:
+		tapan_enable_ldo_h(codec, 0);
+		usleep_range(1000, 1000);
+		break;
+	}
+	return 0;
+#endif
 }
 
 static int tapan_codec_enable_rx_bias(struct snd_soc_dapm_widget *w,
@@ -2782,6 +2921,10 @@ static int tapan_hph_pa_event(struct snd_soc_dapm_widget *w,
 	case SND_SOC_DAPM_PRE_PMU:
 		/* Let MBHC module know PA is turning on */
 		wcd9xxx_resmgr_notifier_call(&tapan->resmgr, e_pre_on);
+#if defined(CONFIG_MACH_ATLANTICLTE_ATT) || defined(CONFIG_MACH_ATLANTICLTE_USC)
+		snd_soc_write(codec,TAPAN_A_CDC_CLSH_V_PA_HD_HPH,0x19);
+		snd_soc_write(codec,TAPAN_A_CDC_CLSH_V_PA_MIN_HPH, 0x26);
+#endif
 		break;
 	case SND_SOC_DAPM_POST_PMU:
 		dev_dbg(codec->dev, "%s: sleep %d ms after %s PA enable.\n",
@@ -2808,6 +2951,10 @@ static int tapan_hph_pa_event(struct snd_soc_dapm_widget *w,
 						 req_clsh_state,
 						 WCD9XXX_CLSH_REQ_DISABLE,
 						 WCD9XXX_CLSH_EVENT_POST_PA);
+#if defined(CONFIG_MACH_ATLANTICLTE_ATT) || defined(CONFIG_MACH_ATLANTICLTE_USC)
+		snd_soc_write(codec,TAPAN_A_CDC_CLSH_V_PA_HD_HPH,0x00);
+		snd_soc_write(codec,TAPAN_A_CDC_CLSH_V_PA_MIN_HPH, 0x00);
+#endif
 		break;
 	}
 	return 0;
@@ -3112,8 +3259,10 @@ static const struct snd_soc_dapm_route audio_map[] = {
 	{"SPK PA", NULL, "SPK DAC"},
 	{"SPK DAC", NULL, "VDD_SPKDRV"},
 
-	{"RX1 CHAIN", NULL, "RX1 MIX2"},
-	{"RX2 CHAIN", NULL, "RX2 MIX2"},
+	{"RX1 INTERPOLATOR", NULL, "RX1 MIX2"},
+	{"RX1 CHAIN", NULL, "RX1 INTERPOLATOR"},
+	{"RX2 INTERPOLATOR", NULL, "RX2 MIX2"},
+	{"RX2 CHAIN", NULL, "RX2 INTERPOLATOR"},
 	{"CLASS_H_DSM MUX", "RX_HPHL", "RX1 CHAIN"},
 
 	{"LINEOUT1 DAC", NULL, "RX_BIAS"},
@@ -3258,7 +3407,9 @@ static const struct snd_soc_dapm_route audio_map[] = {
 	{"MIC BIAS2 Internal2", NULL, "LDO_H"},
 	{"MIC BIAS2 Internal3", NULL, "LDO_H"},
 	{"MIC BIAS2 External", NULL, "LDO_H"},
+#ifndef CONFIG_ARCH_MSM8226
 	{DAPM_MICBIAS2_EXTERNAL_STANDALONE, NULL, "LDO_H Standalone"},
+#endif
 
 	/*sidetone path enable*/
 	{"IIR1", NULL, "IIR1 INP1 MUX"},
@@ -3478,6 +3629,23 @@ static unsigned int tapan_read(struct snd_soc_codec *codec,
 	return val;
 }
 
+#ifdef CONFIG_SND_SOC_ES325_ATLANTIC
+
+static int tapan_startup(struct snd_pcm_substream *substream,
+		struct snd_soc_dai *dai)
+{
+	struct wcd9xxx *tapan_core = dev_get_drvdata(dai->codec->dev->parent);
+	dev_dbg(dai->codec->dev, "%s(): substream = %s  stream = %d\n",
+		 __func__, substream->name, substream->stream);
+	if ((tapan_core != NULL) &&
+	    (tapan_core->dev != NULL) &&
+	    (tapan_core->dev->parent != NULL))
+		pm_runtime_get_sync(tapan_core->dev->parent);
+		es325_wrapper_wakeup(dai);
+
+	return 0;
+}
+#else
 static int tapan_startup(struct snd_pcm_substream *substream,
 		struct snd_soc_dai *dai)
 {
@@ -3491,7 +3659,7 @@ static int tapan_startup(struct snd_pcm_substream *substream,
 
 	return 0;
 }
-
+#endif
 static void tapan_shutdown(struct snd_pcm_substream *substream,
 		struct snd_soc_dai *dai)
 {
@@ -3510,6 +3678,13 @@ static void tapan_shutdown(struct snd_pcm_substream *substream,
 				 tapan->dai[dai->id].ch_mask);
 		}
 	}
+#ifdef CONFIG_SND_SOC_ES325_ATLANTIC
+	if ((tapan_core != NULL) &&
+	    (tapan_core->dev != NULL) &&
+	    (tapan_core->dev->parent != NULL))	{
+		es325_wrapper_sleep(dai->id);
+	}
+#endif
 	if ((tapan_core != NULL) &&
 	    (tapan_core->dev != NULL) &&
 	    (tapan_core->dev->parent != NULL) &&
@@ -4026,6 +4201,229 @@ static int tapan_hw_params(struct snd_pcm_substream *substream,
 	return 0;
 }
 
+#if defined(CONFIG_SND_SOC_ES705)
+int (*remote_route_enable)(struct snd_soc_dai *dai) = REMOTE_ROUTE_ENABLE_CB;
+int (*slim_get_channel_map)(struct snd_soc_dai *dai,
+		unsigned int *tx_num, unsigned int *tx_slot,
+		unsigned int *rx_num, unsigned int *rx_slot)
+			= SLIM_GET_CHANNEL_MAP_CB;
+int (*slim_set_channel_map)(struct snd_soc_dai *dai,
+		unsigned int tx_num, unsigned int *tx_slot,
+		unsigned int rx_num, unsigned int *rx_slot)
+			= SLIM_SET_CHANNEL_MAP_CB;
+int (*slim_hw_params)(struct snd_pcm_substream *substream,
+		struct snd_pcm_hw_params *params,
+		struct snd_soc_dai *dai)
+		= SLIM_HW_PARAMS_CB;
+int (*remote_cfg_slim_rx)(int dai_id)	=	REMOTE_CFG_SLIM_RX_CB;
+int (*remote_close_slim_rx)(int dai_id)	=	REMOTE_CLOSE_SLIM_RX_CB;
+int (*remote_cfg_slim_tx)(int dai_id)	=	REMOTE_CFG_SLIM_TX_CB;
+int (*remote_close_slim_tx)(int dai_id)	=	REMOTE_CLOSE_SLIM_TX_CB;
+int (*remote_add_codec_controls)(struct snd_soc_codec *codec)
+		= REMOTE_ADD_CODEC_CONTROLS_CB;
+
+static int tapan_esxxx_startup(struct snd_pcm_substream *substream,
+		struct snd_soc_dai *dai)
+{
+	tapan_startup(substream, dai);
+/*
+	if (es705_remote_route_enable(dai))
+		es705_slim_startup(substream, dai);
+*/
+
+	return 0;
+}
+
+static void tapan_esxxx_shutdown(struct snd_pcm_substream *substream,
+		struct snd_soc_dai *dai)
+{
+	tapan_shutdown(substream, dai);
+
+/*
+	if (es705_remote_route_enable(dai))
+		es705_slim_shutdown(substream, dai);
+*/
+}
+
+static int tapan_esxxx_hw_params(struct snd_pcm_substream *substream,
+		struct snd_pcm_hw_params *params,
+		struct snd_soc_dai *dai)
+{
+	int rc = 0;
+	pr_info("%s: dai_name = %s DAI-ID %x rate %d num_ch %d\n", __func__,
+			dai->name, dai->id, params_rate(params),
+			params_channels(params));
+
+	rc = tapan_hw_params(substream, params, dai);
+
+	if (remote_route_enable(dai))
+		rc = slim_hw_params(substream, params, dai);
+
+	return rc;
+}
+static int tapan_esxxx_set_channel_map(struct snd_soc_dai *dai,
+				unsigned int tx_num, unsigned int *tx_slot,
+				unsigned int rx_num, unsigned int *rx_slot)
+
+{
+	unsigned int tapan_tx_num = 0;
+	unsigned int tapan_tx_slot[6];
+	unsigned int tapan_rx_num = 0;
+	unsigned int tapan_rx_slot[6];
+	int rc = 0;
+	pr_info("%s(): dai_name = %s DAI-ID %x tx_ch %d rx_ch %d\n",
+			__func__, dai->name, dai->id, tx_num, rx_num);
+
+	if (remote_route_enable(dai)) {
+		rc = tapan_get_channel_map(dai, &tapan_tx_num, tapan_tx_slot,
+					&tapan_rx_num, tapan_rx_slot);
+
+		rc = tapan_set_channel_map(dai, tx_num, tapan_tx_slot, rx_num, tapan_rx_slot);
+
+		rc = slim_set_channel_map(dai, tx_num, tx_slot, rx_num,
+					rx_slot);
+	} else
+		rc = tapan_set_channel_map(dai, tx_num, tx_slot, rx_num, rx_slot);
+
+	return rc;
+}
+
+static int tapan_esxxx_get_channel_map(struct snd_soc_dai *dai,
+				unsigned int *tx_num, unsigned int *tx_slot,
+				unsigned int *rx_num, unsigned int *rx_slot)
+
+{
+	int rc = 0;
+
+	pr_info("%s(): dai_name = %s DAI-ID %d tx_ch %d rx_ch %d\n",
+			__func__, dai->name, dai->id, *tx_num, *rx_num);
+
+	if (remote_route_enable(dai))
+		rc = slim_get_channel_map(dai, tx_num, tx_slot, rx_num,
+					rx_slot);
+	else
+		rc = tapan_get_channel_map(dai, tx_num, tx_slot, rx_num, rx_slot);
+
+	return rc;
+}
+static struct snd_soc_dai_ops tapan_dai_ops = {
+	.startup = tapan_esxxx_startup, /* tapan_startup, */
+	.shutdown = tapan_esxxx_shutdown, /* tapan_shutdown, */
+	.hw_params = tapan_esxxx_hw_params, /* tapan_hw_params, */
+	.set_sysclk = tapan_set_dai_sysclk,
+	.set_fmt = tapan_set_dai_fmt,
+	.set_channel_map = tapan_esxxx_set_channel_map,
+			/* tapan_set_channel_map, */
+	.get_channel_map = tapan_esxxx_get_channel_map,
+			/* tapan_get_channel_map, */
+};
+#elif defined(CONFIG_SND_SOC_ES325_ATLANTIC)
+static int tapan_es325_hw_params(struct snd_pcm_substream *substream,
+		struct snd_pcm_hw_params *params,
+		struct snd_soc_dai *dai)
+{
+	int rc = 0;
+	dev_err(dai->dev,"%s: dai_name = %s DAI-ID %x rate %d num_ch %d\n", __func__,
+			dai->name, dai->id, params_rate(params),
+			params_channels(params));
+
+	rc = tapan_hw_params(substream, params, dai);
+
+	if (es325_remote_route_enable(dai))
+		rc = es325_slim_hw_params(substream, params, dai);
+
+	return rc;
+}
+
+#define SLIM_BUGFIX
+static int tapan_es325_set_channel_map(struct snd_soc_dai *dai,
+				unsigned int tx_num, unsigned int *tx_slot,
+				unsigned int rx_num, unsigned int *rx_slot)
+
+{
+#if !defined(SLIM_BUGFIX)
+	unsigned int tapan_tx_num = 0;
+#endif
+#if !defined(SLIM_BUGFIX)
+	unsigned int tapan_rx_num = 0;
+#endif
+
+#if defined(SLIM_BUGFIX)
+	unsigned int temp_tx_num = 0;
+	unsigned int temp_rx_num = 0;
+#endif
+	int rc = 0;
+
+	if (es325_remote_route_enable(dai)) {
+		unsigned int tapan_tx_slot[6];
+		unsigned int tapan_rx_slot[6];
+#if defined(SLIM_BUGFIX)
+		rc = tapan_get_channel_map(dai, &temp_tx_num, tapan_tx_slot,
+					&temp_rx_num, tapan_rx_slot);
+		if (rc < 0 )
+			pr_err ("error statement");
+			goto out;
+
+#else
+		rc = tapan_get_channel_map(dai, &tapan_tx_num, tapan_tx_slot,
+					&tapan_rx_num, tapan_rx_slot);
+		  if (rc < 0 )
+			pr_err ("error statement");
+			goto out;
+
+#endif
+
+		rc = tapan_set_channel_map(dai, tx_num, tapan_tx_slot, rx_num, tapan_rx_slot);
+		if (rc < 0 )
+			pr_err ("error statement");
+			goto out;
+
+		rc = es325_slim_set_channel_map(dai, tx_num, tx_slot, rx_num, rx_slot);
+		if (rc < 0 )
+			pr_err ("error statement");
+			goto out;
+
+
+	} else
+		rc = tapan_set_channel_map(dai, tx_num, tx_slot, rx_num, rx_slot);
+		if (rc < 0 )
+			pr_err ("error statement");
+			goto out;
+
+out:
+	return rc;
+}
+static int tapan_es325_get_channel_map(struct snd_soc_dai *dai,
+				unsigned int *tx_num, unsigned int *tx_slot,
+				unsigned int *rx_num, unsigned int *rx_slot)
+
+{
+	int rc = 0;
+
+	if (es325_remote_route_enable(dai))
+		rc = es325_slim_get_channel_map(dai, tx_num, tx_slot, rx_num, rx_slot);
+	else
+		rc = tapan_get_channel_map(dai, tx_num, tx_slot, rx_num, rx_slot);
+
+	return rc;
+}
+
+static struct snd_soc_dai_ops tapan_dai_ops = {
+	.startup = tapan_startup,
+	.shutdown = tapan_shutdown,
+	.hw_params = tapan_es325_hw_params, /* tabla_hw_params, */
+	.set_sysclk = tapan_set_dai_sysclk,
+	.set_fmt = tapan_set_dai_fmt,
+	.set_channel_map = tapan_set_channel_map, /* tabla_set_channel_map, */
+	.get_channel_map = tapan_es325_get_channel_map, /* tabla_get_channel_map, */
+};
+static struct snd_soc_dai_ops tapan_es325_dai_ops = {
+	.startup = tapan_startup,
+	.hw_params = tapan_es325_hw_params,
+	.set_channel_map = tapan_es325_set_channel_map,
+	.get_channel_map = tapan_es325_get_channel_map,
+};
+#else
 static struct snd_soc_dai_ops tapan_dai_ops = {
 	.startup = tapan_startup,
 	.shutdown = tapan_shutdown,
@@ -4035,6 +4433,7 @@ static struct snd_soc_dai_ops tapan_dai_ops = {
 	.set_channel_map = tapan_set_channel_map,
 	.get_channel_map = tapan_get_channel_map,
 };
+#endif
 
 static struct snd_soc_dai_driver tapan9302_dai[] = {
 	{
@@ -4121,6 +4520,50 @@ static struct snd_soc_dai_driver tapan9302_dai[] = {
 		},
 		.ops = &tapan_dai_ops,
 	},
+#ifdef CONFIG_SND_SOC_ES325_ATLANTIC
+	{
+		.name = "tapan_es325_rx1",
+		.id = AIF1_PB + ES325_DAI_ID_OFFSET,
+		.playback = {
+			.stream_name = "AIF1 Playback",
+			.rates = WCD9306_RATES,
+			.formats = TAPAN_FORMATS,
+			.rate_max = 192000,
+			.rate_min = 8000,
+			.channels_min = 1,
+			.channels_max = 2,
+		},
+		.ops = &tapan_es325_dai_ops,
+	},
+	{
+		.name = "tapan_es325_tx1",
+		.id = AIF1_CAP + ES325_DAI_ID_OFFSET,
+		.capture = {
+			.stream_name = "AIF1 Capture",
+			.rates = WCD9306_RATES,
+			.formats = TAPAN_FORMATS,
+			.rate_max = 192000,
+			.rate_min = 8000,
+			.channels_min = 1,
+			.channels_max = 2,
+		},
+		.ops = &tapan_es325_dai_ops,
+	},
+	{
+		.name = "tapan_es325_rx2",
+		.id = AIF2_PB + ES325_DAI_ID_OFFSET,
+		.playback = {
+			.stream_name = "AIF2 Playback",
+			.rates = WCD9306_RATES,
+			.formats = TAPAN_FORMATS,
+			.rate_max = 192000,
+			.rate_min = 8000,
+			.channels_min = 1,
+			.channels_max = 2,
+		},
+		.ops = &tapan_es325_dai_ops,
+	},
+#endif
 };
 
 static struct snd_soc_dai_driver tapan_dai[] = {
@@ -4308,11 +4751,21 @@ static int tapan_codec_enable_slimrx(struct snd_soc_dapm_widget *w,
 	case SND_SOC_DAPM_POST_PMU:
 		dai->bus_down_in_recovery = false;
 		(void) tapan_codec_enable_slim_chmask(dai, true);
+#if defined(CONFIG_SND_SOC_ES705)
+		ret = remote_cfg_slim_rx(w->shift);
+#elif defined(CONFIG_SND_SOC_ES325_ATLANTIC)
+		ret = es325_remote_cfg_slim_rx(w->shift);
+#endif
 		ret = wcd9xxx_cfg_slim_sch_rx(core, &dai->wcd9xxx_ch_list,
 					      dai->rate, dai->bit_width,
 					      &dai->grph);
 		break;
 	case SND_SOC_DAPM_POST_PMD:
+#if defined(CONFIG_SND_SOC_ES705)
+		ret = remote_close_slim_rx(w->shift);
+#elif defined(CONFIG_SND_SOC_ES325_ATLANTIC)
+		ret = es325_remote_close_slim_rx(w->shift);
+#endif
 		ret = wcd9xxx_close_slim_sch_rx(core, &dai->wcd9xxx_ch_list,
 						dai->grph);
 		if (!dai->bus_down_in_recovery)
@@ -4344,11 +4797,14 @@ static int tapan_codec_enable_slimtx(struct snd_soc_dapm_widget *w,
 	struct wcd9xxx *core;
 	struct snd_soc_codec *codec = w->codec;
 	struct tapan_priv *tapan_p = snd_soc_codec_get_drvdata(codec);
-	u32  ret = 0;
+	int  ret = 0;
 	struct wcd9xxx_codec_dai_data *dai;
 
 	core = dev_get_drvdata(codec->dev->parent);
-
+	if (!core) {
+		dev_err(codec->dev,"core is NULL\n");
+		return -ENOMEM;
+	}
 	dev_dbg(codec->dev, "%s: event called! codec name %s\n",
 		__func__, w->codec->name);
 	dev_dbg(codec->dev, "%s: num_dai %d stream name %s\n",
@@ -4368,8 +4824,18 @@ static int tapan_codec_enable_slimtx(struct snd_soc_dapm_widget *w,
 		ret = wcd9xxx_cfg_slim_sch_tx(core, &dai->wcd9xxx_ch_list,
 					      dai->rate, dai->bit_width,
 					      &dai->grph);
+#if defined(CONFIG_SND_SOC_ES705)
+		ret = remote_cfg_slim_tx(w->shift);
+#elif defined(CONFIG_SND_SOC_ES325_ATLANTIC)
+		ret = es325_remote_cfg_slim_tx(w->shift);
+#endif
 		break;
 	case SND_SOC_DAPM_POST_PMD:
+#if defined(CONFIG_SND_SOC_ES705)
+		ret = remote_close_slim_tx(w->shift);
+#elif defined(CONFIG_SND_SOC_ES325_ATLANTIC)
+			ret = es325_remote_close_slim_tx(w->shift);
+#endif
 		ret = wcd9xxx_close_slim_sch_tx(core, &dai->wcd9xxx_ch_list,
 						dai->grph);
 		if (!dai->bus_down_in_recovery)
@@ -4413,11 +4879,12 @@ static int tapan_codec_enable_ear_pa(struct snd_soc_dapm_widget *w,
 		usleep_range(5000, 5010);
 		break;
 	case SND_SOC_DAPM_POST_PMD:
+		usleep_range(5000, 5010);
+		snd_soc_update_bits(codec, TAPAN_A_RX_EAR_EN, 0x40, 0x00);
 		wcd9xxx_clsh_fsm(codec, &tapan_p->clsh_d,
 						 WCD9XXX_CLSH_STATE_EAR,
 						 WCD9XXX_CLSH_REQ_DISABLE,
 						 WCD9XXX_CLSH_EVENT_POST_PA);
-		usleep_range(5000, 5010);
 	}
 	return 0;
 }
@@ -4588,6 +5055,7 @@ static int tapan_codec_set_iir_gain(struct snd_soc_dapm_widget *w,
 	return 0;
 }
 
+
 static const struct snd_soc_dapm_widget tapan_9306_dapm_widgets[] = {
 	/* RX4 MIX1 mux inputs */
 	SND_SOC_DAPM_MUX("RX4 MIX1 INP1", SND_SOC_NOPM, 0, 0,
@@ -4652,13 +5120,13 @@ static const struct snd_soc_dapm_widget tapan_9306_dapm_widgets[] = {
 		SND_SOC_DAPM_POST_PMU | SND_SOC_DAPM_POST_PMD),
 	SND_SOC_DAPM_MUX("ANC1 FB MUX", SND_SOC_NOPM, 0, 0, &anc1_fb_mux),
 
-	SND_SOC_DAPM_MICBIAS_E("MIC BIAS3 External", SND_SOC_NOPM, 7, 0,
+	SND_SOC_DAPM_MICBIAS_E("MIC BIAS3 External", SND_SOC_NOPM, 3, 0,
 		tapan_codec_enable_micbias, SND_SOC_DAPM_PRE_PMU |
 		SND_SOC_DAPM_POST_PMU | SND_SOC_DAPM_POST_PMD),
-	SND_SOC_DAPM_MICBIAS_E("MIC BIAS3 Internal1", SND_SOC_NOPM, 7, 0,
+	SND_SOC_DAPM_MICBIAS_E("MIC BIAS3 Internal1", SND_SOC_NOPM, 3, 0,
 		tapan_codec_enable_micbias, SND_SOC_DAPM_PRE_PMU |
 		SND_SOC_DAPM_POST_PMU | SND_SOC_DAPM_POST_PMD),
-	SND_SOC_DAPM_MICBIAS_E("MIC BIAS3 Internal2", SND_SOC_NOPM, 7, 0,
+	SND_SOC_DAPM_MICBIAS_E("MIC BIAS3 Internal2", SND_SOC_NOPM, 3, 0,
 		tapan_codec_enable_micbias, SND_SOC_DAPM_PRE_PMU |
 		SND_SOC_DAPM_POST_PMU | SND_SOC_DAPM_POST_PMD),
 
@@ -4743,15 +5211,21 @@ static const struct snd_soc_dapm_widget tapan_common_dapm_widgets[] = {
 	SND_SOC_DAPM_MIXER("RX1 MIX1", SND_SOC_NOPM, 0, 0, NULL, 0),
 	SND_SOC_DAPM_MIXER("RX2 MIX1", SND_SOC_NOPM, 0, 0, NULL, 0),
 
-	SND_SOC_DAPM_MIXER_E("RX1 MIX2", TAPAN_A_CDC_CLK_RX_B1_CTL, 0, 0, NULL,
-		0, tapan_codec_enable_interpolator, SND_SOC_DAPM_PRE_PMU |
-		SND_SOC_DAPM_POST_PMU),
-	SND_SOC_DAPM_MIXER_E("RX2 MIX2", TAPAN_A_CDC_CLK_RX_B1_CTL, 1, 0, NULL,
-		0, tapan_codec_enable_interpolator, SND_SOC_DAPM_PRE_PMU |
-		SND_SOC_DAPM_POST_PMU),
+	SND_SOC_DAPM_MIXER("RX1 MIX2", SND_SOC_NOPM, 0, 0, NULL, 0),
+	SND_SOC_DAPM_MIXER("RX2 MIX2", SND_SOC_NOPM, 0, 0, NULL, 0),
+
 	SND_SOC_DAPM_MIXER_E("RX3 MIX1", TAPAN_A_CDC_CLK_RX_B1_CTL, 2, 0, NULL,
 		0, tapan_codec_enable_interpolator, SND_SOC_DAPM_PRE_PMU |
 		SND_SOC_DAPM_POST_PMU),
+
+	SND_SOC_DAPM_VIRT_MUX_E("RX1 INTERPOLATOR",
+		TAPAN_A_CDC_CLK_RX_B1_CTL, 0, 0,
+		&rx1_interpolator, tapan_codec_enable_interpolator,
+		SND_SOC_DAPM_PRE_PMU | SND_SOC_DAPM_POST_PMU),
+	SND_SOC_DAPM_VIRT_MUX_E("RX2 INTERPOLATOR",
+		TAPAN_A_CDC_CLK_RX_B1_CTL, 1, 0,
+		&rx2_interpolator, tapan_codec_enable_interpolator,
+		SND_SOC_DAPM_PRE_PMU | SND_SOC_DAPM_POST_PMU),
 
 	SND_SOC_DAPM_MIXER("RX1 CHAIN", TAPAN_A_CDC_RX1_B6_CTL, 5, 0,
 						NULL, 0),
@@ -4883,10 +5357,11 @@ static const struct snd_soc_dapm_widget tapan_common_dapm_widgets[] = {
 		SND_SOC_DAPM_PRE_PMU | SND_SOC_DAPM_POST_PMU |
 		SND_SOC_DAPM_PRE_PMD | SND_SOC_DAPM_POST_PMD),
 
-	SND_SOC_DAPM_SUPPLY("LDO_H", SND_SOC_NOPM, 7, 0,
-		tapan_codec_enable_ldo_h,
-		SND_SOC_DAPM_PRE_PMU | SND_SOC_DAPM_POST_PMD),
+	SND_SOC_DAPM_SUPPLY("LDO_H", SND_SOC_NOPM, 0, 0,
+		tapan_codec_enable_ldo_h, SND_SOC_DAPM_POST_PMU |
+		SND_SOC_DAPM_POST_PMD),
 
+#ifndef CONFIG_ARCH_MSM8226
 	/*
 	 * DAPM 'LDO_H Standalone' is to be powered by mbhc driver after
 	 * acquring codec_resource lock.
@@ -4895,17 +5370,23 @@ static const struct snd_soc_dapm_widget tapan_common_dapm_widgets[] = {
 	SND_SOC_DAPM_SUPPLY("LDO_H Standalone", SND_SOC_NOPM, 7, 0,
 			    __tapan_codec_enable_ldo_h,
 			    SND_SOC_DAPM_PRE_PMU | SND_SOC_DAPM_POST_PMD),
-
+#endif
 	SND_SOC_DAPM_INPUT("AMIC1"),
-	SND_SOC_DAPM_MICBIAS_E("MIC BIAS1 External", SND_SOC_NOPM, 7, 0,
+	SND_SOC_DAPM_MICBIAS_E("MIC BIAS1 External", SND_SOC_NOPM, 1, 0,
 		tapan_codec_enable_micbias, SND_SOC_DAPM_PRE_PMU |
 		SND_SOC_DAPM_POST_PMU | SND_SOC_DAPM_POST_PMD),
-	SND_SOC_DAPM_MICBIAS_E("MIC BIAS1 Internal1", SND_SOC_NOPM, 7, 0,
+	SND_SOC_DAPM_MICBIAS_E("MIC BIAS1 Internal1", SND_SOC_NOPM, 1, 0,
 		tapan_codec_enable_micbias, SND_SOC_DAPM_PRE_PMU |
 		SND_SOC_DAPM_POST_PMU | SND_SOC_DAPM_POST_PMD),
-	SND_SOC_DAPM_MICBIAS_E("MIC BIAS1 Internal2", SND_SOC_NOPM, 7, 0,
+	SND_SOC_DAPM_MICBIAS_E("MIC BIAS1 Internal2", SND_SOC_NOPM, 1, 0,
 		tapan_codec_enable_micbias, SND_SOC_DAPM_PRE_PMU |
 		SND_SOC_DAPM_POST_PMU | SND_SOC_DAPM_POST_PMD),
+
+	SND_SOC_DAPM_MICBIAS_E("MIC BIAS2 Power External",
+		SND_SOC_NOPM, 2, 0,
+		tapan_codec_enable_micbias_power,
+		SND_SOC_DAPM_PRE_PMU | SND_SOC_DAPM_POST_PMU |
+		SND_SOC_DAPM_POST_PMD),
 
 	SND_SOC_DAPM_ADC_E("ADC1", NULL, TAPAN_A_TX_1_EN, 7, 0,
 		tapan_codec_enable_adc, SND_SOC_DAPM_PRE_PMU |
@@ -4925,24 +5406,24 @@ static const struct snd_soc_dapm_widget tapan_common_dapm_widgets[] = {
 		SND_SOC_DAPM_POST_PMU | SND_SOC_DAPM_POST_PMD),
 
 	SND_SOC_DAPM_INPUT("AMIC2"),
-	SND_SOC_DAPM_MICBIAS_E("MIC BIAS2 External", SND_SOC_NOPM, 7, 0,
+	SND_SOC_DAPM_MICBIAS_E("MIC BIAS2 External", SND_SOC_NOPM, 2, 0,
 		tapan_codec_enable_micbias, SND_SOC_DAPM_PRE_PMU |
 		SND_SOC_DAPM_POST_PMU |	SND_SOC_DAPM_POST_PMD),
-	SND_SOC_DAPM_MICBIAS_E("MIC BIAS2 Internal1", SND_SOC_NOPM, 7, 0,
+	SND_SOC_DAPM_MICBIAS_E("MIC BIAS2 Internal1", SND_SOC_NOPM, 2, 0,
 		tapan_codec_enable_micbias, SND_SOC_DAPM_PRE_PMU |
 		SND_SOC_DAPM_POST_PMU | SND_SOC_DAPM_POST_PMD),
-	SND_SOC_DAPM_MICBIAS_E("MIC BIAS2 Internal2", SND_SOC_NOPM, 7, 0,
+	SND_SOC_DAPM_MICBIAS_E("MIC BIAS2 Internal2", SND_SOC_NOPM, 2, 0,
 		tapan_codec_enable_micbias, SND_SOC_DAPM_PRE_PMU |
 		SND_SOC_DAPM_POST_PMU | SND_SOC_DAPM_POST_PMD),
-	SND_SOC_DAPM_MICBIAS_E("MIC BIAS2 Internal3", SND_SOC_NOPM, 7, 0,
+	SND_SOC_DAPM_MICBIAS_E("MIC BIAS2 Internal3", SND_SOC_NOPM, 2, 0,
 		tapan_codec_enable_micbias, SND_SOC_DAPM_PRE_PMU |
 		SND_SOC_DAPM_POST_PMU | SND_SOC_DAPM_POST_PMD),
-
+#ifndef CONFIG_ARCH_MSM8226
 	SND_SOC_DAPM_MICBIAS_E(DAPM_MICBIAS2_EXTERNAL_STANDALONE, SND_SOC_NOPM,
 			       7, 0, tapan_codec_enable_micbias,
 			       SND_SOC_DAPM_PRE_PMU | SND_SOC_DAPM_POST_PMU |
 			       SND_SOC_DAPM_POST_PMD),
-
+#endif
 	SND_SOC_DAPM_AIF_OUT_E("AIF1 CAP", "AIF1 Capture", 0, SND_SOC_NOPM,
 		AIF1_CAP, 0, tapan_codec_enable_slimtx,
 		SND_SOC_DAPM_POST_PMU | SND_SOC_DAPM_POST_PMD),
@@ -4965,12 +5446,10 @@ static const struct snd_soc_dapm_widget tapan_common_dapm_widgets[] = {
 		SND_SOC_DAPM_POST_PMD),
 
 	/* Sidetone */
-	SND_SOC_DAPM_MUX_E("IIR1 INP1 MUX", TAPAN_A_CDC_IIR1_GAIN_B1_CTL, 0, 0,
-		&iir1_inp1_mux, tapan_codec_iir_mux_event,
-		SND_SOC_DAPM_POST_PMU | SND_SOC_DAPM_POST_PMD),
-
-	SND_SOC_DAPM_PGA_E("IIR1", TAPAN_A_CDC_CLK_SD_CTL, 0, 0, NULL, 0,
-		tapan_codec_set_iir_gain, SND_SOC_DAPM_POST_PMU),
+	//SND_SOC_DAPM_MUX("IIR1 INP1 MUX", SND_SOC_NOPM, 0, 0, &iir1_inp1_mux),
+	SND_SOC_DAPM_MUX_E("IIR1 INP1 MUX", TAPAN_A_CDC_IIR1_GAIN_B1_CTL, 0, 0,&iir1_inp1_mux, tapan_codec_iir_mux_event,SND_SOC_DAPM_POST_PMU | SND_SOC_DAPM_POST_PMD),
+	//SND_SOC_DAPM_PGA("IIR1", TAPAN_A_CDC_CLK_SD_CTL, 0, 0, NULL, 0),
+	SND_SOC_DAPM_PGA_E("IIR1", TAPAN_A_CDC_CLK_SD_CTL, 0, 0, NULL, 0,tapan_codec_set_iir_gain, SND_SOC_DAPM_POST_PMU),
 
 	SND_SOC_DAPM_MUX_E("IIR1 INP2 MUX", TAPAN_A_CDC_IIR1_GAIN_B2_CTL, 0, 0,
 		&iir1_inp2_mux, tapan_codec_iir_mux_event,
@@ -5114,10 +5593,10 @@ static int tapan_handle_pdata(struct tapan_priv *tapan)
 		rc = -ENODEV;
 		goto done;
 	}
+
 	txfe_bypass = pdata->amic_settings.txfe_enable;
 	txfe_buff = pdata->amic_settings.txfe_buff;
 	flag = pdata->amic_settings.use_pdata;
-
 	/* Make sure settings are correct */
 	if ((pdata->micbias.ldoh_v > WCD9XXX_LDOH_3P0_V) ||
 	    (pdata->micbias.bias1_cfilt_sel > WCD9XXX_CFILT3_SEL) ||
@@ -5334,7 +5813,13 @@ static const struct tapan_reg_mask_val tapan_reg_defaults[] = {
 	/*Reduce EAR DAC bias to 70% */
 	TAPAN_REG_VAL(TAPAN_A_RX_EAR_BIAS_PA, 0x76),
 	/* Reduce LINE DAC bias to 70% */
+#if defined(CONFIG_SEC_MATISSE_PROJECT) || defined(CONFIG_SEC_T10_PROJECT)
 	TAPAN_REG_VAL(TAPAN_A_RX_LINE_BIAS_PA, 0x78),
+#elif defined(CONFIG_MACH_MS01_EUR_3G)
+	TAPAN_REG_VAL(TAPAN_A_RX_LINE_BIAS_PA, 0x7A),
+#else
+	TAPAN_REG_VAL(TAPAN_A_RX_LINE_BIAS_PA, 0x7B),
+#endif
 
 	/*
 	 * There is a diode to pull down the micbias while doing
@@ -5368,8 +5853,8 @@ static const struct tapan_reg_mask_val tapan_2_x_reg_reset_values[] = {
 	TAPAN_REG_VAL(TAPAN_A_CDC_CLSH_B3_CTL, 0x00),
 	TAPAN_REG_VAL(TAPAN_A_CDC_CLSH_BUCK_NCP_VARS, 0x00),
 	TAPAN_REG_VAL(TAPAN_A_CDC_CLSH_V_PA_HD_EAR, 0x00),
-	TAPAN_REG_VAL(TAPAN_A_CDC_CLSH_V_PA_HD_HPH, 0x00),
 	TAPAN_REG_VAL(TAPAN_A_CDC_CLSH_V_PA_MIN_EAR, 0x00),
+	TAPAN_REG_VAL(TAPAN_A_CDC_CLSH_V_PA_HD_HPH, 0x00),
 	TAPAN_REG_VAL(TAPAN_A_CDC_CLSH_V_PA_MIN_HPH, 0x00),
 };
 
@@ -5428,7 +5913,11 @@ static const struct tapan_reg_mask_val tapan_codec_reg_init_val[] = {
 	/* Initialize current threshold to 365MA
 	 * number of wait and run cycles to 4096
 	 */
+#if defined (CONFIG_MACH_MILLETLTE_KOR)	 
+	{TAPAN_A_RX_HPH_OCP_CTL, 0xEB, 0x6B},
+#else	
 	{TAPAN_A_RX_HPH_OCP_CTL, 0xE9, 0x69},
+#endif
 	{TAPAN_A_RX_COM_OCP_COUNT, 0xFF, 0xFF},
 	{TAPAN_A_RX_HPH_L_TEST, 0x01, 0x01},
 	{TAPAN_A_RX_HPH_R_TEST, 0x01, 0x01},
@@ -5487,6 +5976,24 @@ static const struct tapan_reg_mask_val tapan_codec_reg_init_val[] = {
 	{TAPAN_A_RX_HPH_CHOP_CTL, 0xFF, 0x24},
 };
 
+#if defined (CONFIG_MACH_RUBENSLTE_OPEN)
+static const struct tapan_reg_mask_val tapan_codec_reg_mib3_int_rbias_init_val[] = {
+	{TAPAN_A_MICB_3_INT_RBIAS, 0x20, 0x00},
+};
+#endif
+
+#if defined(CONFIG_MACH_MILLETLTE_VZW)
+static const struct tapan_reg_mask_val tapan_codec_reg_mib2_ctl_init_val[] = {
+	{TAPAN_A_MICB_2_CTL, 0x01, 0x01},
+};
+#endif
+
+#if defined(CONFIG_MACH_ATLANTICLTE_ATT) || defined(CONFIG_SEC_ATLANTIC3G_COMMON) || defined(CONFIG_MACH_ATLANTICLTE_USC) || defined(CONFIG_SEC_RUBENS_PROJECT)
+static const struct tapan_reg_mask_val tapan_codec_reg_hph_ocp_ctl_init_val[] = {
+	{TAPAN_A_RX_HPH_OCP_CTL, 0xEB, 0x6B},
+};
+#endif
+
 void *tapan_get_afe_config(struct snd_soc_codec *codec,
 			   enum afe_config_type config_type)
 {
@@ -5527,6 +6034,7 @@ static void tapan_init_slim_slave_cfg(struct snd_soc_codec *codec)
 	pr_debug("%s: slimbus logical address 0x%llx\n", __func__, eaddr);
 }
 
+extern int system_rev;
 static void tapan_codec_init_reg(struct snd_soc_codec *codec)
 {
 	u32 i;
@@ -5535,6 +6043,27 @@ static void tapan_codec_init_reg(struct snd_soc_codec *codec)
 		snd_soc_update_bits(codec, tapan_codec_reg_init_val[i].reg,
 				tapan_codec_reg_init_val[i].mask,
 				tapan_codec_reg_init_val[i].val);
+#if defined (CONFIG_MACH_RUBENSLTE_OPEN)
+		snd_soc_update_bits(codec,tapan_codec_reg_mib3_int_rbias_init_val[0].reg,
+							tapan_codec_reg_mib3_int_rbias_init_val[0].mask,
+							tapan_codec_reg_mib3_int_rbias_init_val[0].val);
+#endif
+
+#if defined(CONFIG_MACH_MILLETLTE_VZW)
+	if (system_rev > 1)
+		{
+			snd_soc_update_bits(codec,tapan_codec_reg_mib2_ctl_init_val[0].reg,
+					tapan_codec_reg_mib2_ctl_init_val[0].mask,
+					tapan_codec_reg_mib2_ctl_init_val[0].val);
+		}
+#endif
+
+#if defined(CONFIG_MACH_ATLANTICLTE_ATT) || defined(CONFIG_SEC_ATLANTIC3G_COMMON) || defined(CONFIG_MACH_ATLANTICLTE_USC) || defined(CONFIG_SEC_RUBENS_PROJECT)
+			snd_soc_update_bits(codec,tapan_codec_reg_hph_ocp_ctl_init_val[0].reg,
+					tapan_codec_reg_hph_ocp_ctl_init_val[0].mask,
+					tapan_codec_reg_hph_ocp_ctl_init_val[0].val);
+#endif
+
 }
 static void tapan_slim_interface_init_reg(struct snd_soc_codec *codec)
 {
@@ -5630,6 +6159,7 @@ static void wcd9xxx_prepare_hph_pa(struct wcd9xxx_mbhc *mbhc,
 	int i;
 	struct snd_soc_codec *codec = mbhc->codec;
 	u32 delay;
+	int ret = 0;
 
 	const struct wcd9xxx_reg_mask_val reg_set_paon[] = {
 		{WCD9XXX_A_CDC_CLSH_B1_CTL, 0x0F, 0x00},
@@ -5695,10 +6225,14 @@ static void wcd9xxx_prepare_hph_pa(struct wcd9xxx_mbhc *mbhc,
 			delay = 1000;
 		else
 			delay = 0;
-		wcd9xxx_soc_update_bits_push(codec, lh,
+		ret = wcd9xxx_soc_update_bits_push(codec, lh,
 					     reg_set_paon[i].reg,
 					     reg_set_paon[i].mask,
 					     reg_set_paon[i].val, delay);
+		if (ret < 0) {
+			pr_debug("%s: wcd9xxx_soc_update_bits_push failed\n", __func__);
+			return;
+		}
 	}
 	pr_debug("%s: PAs are prepared\n", __func__);
 	return;
@@ -5980,11 +6514,16 @@ static int tapan_post_reset_cb(struct wcd9xxx *wcd9xxx)
 		rco_clk_rate = TAPAN_MCLK_CLK_12P288MHZ;
 	else
 		rco_clk_rate = TAPAN_MCLK_CLK_9P6MHZ;
-
+#ifndef CONFIG_ARCH_MSM8226
 	ret = wcd9xxx_mbhc_init(&tapan->mbhc, &tapan->resmgr, codec,
 				tapan_enable_mbhc_micbias,
 				&mbhc_cb, &cdc_intr_ids, rco_clk_rate,
 				TAPAN_CDC_ZDET_SUPPORTED);
+#else
+	ret = wcd9xxx_mbhc_init(&tapan->mbhc, &tapan->resmgr, codec,NULL,
+				&mbhc_cb, &cdc_intr_ids, rco_clk_rate,
+				TAPAN_CDC_ZDET_SUPPORTED);
+#endif
 	if (ret)
 		pr_err("%s: mbhc init failed %d\n", __func__, ret);
 	else
@@ -6136,6 +6675,16 @@ static bool tapan_check_wcd9306(struct device *cdc_dev, bool sensed)
 	return ret;
 };
 
+#ifdef CONFIG_ARCH_MSM8226
+bool codec_probe_done = false;
+
+bool is_codec_probe_done(void)
+{
+	return codec_probe_done;
+}
+EXPORT_SYMBOL(is_codec_probe_done);
+#endif
+
 static int tapan_codec_probe(struct snd_soc_codec *codec)
 {
 	struct wcd9xxx *control;
@@ -6170,6 +6719,7 @@ static int tapan_codec_probe(struct snd_soc_codec *codec)
 
 	snd_soc_codec_set_drvdata(codec, tapan);
 
+	tapan->ldo_h_count = 0;
 	/* codec resmgr module init */
 	wcd9xxx = codec->control_data;
 	core_res = &wcd9xxx->core_res;
@@ -6179,6 +6729,7 @@ static int tapan_codec_probe(struct snd_soc_codec *codec)
 				  WCD9XXX_CDC_TYPE_TAPAN);
 	if (ret) {
 		pr_err("%s: wcd9xxx init failed %d\n", __func__, ret);
+		kfree(tapan);
 		return ret;
 	}
 
@@ -6202,8 +6753,10 @@ static int tapan_codec_probe(struct snd_soc_codec *codec)
 	else
 		rco_clk_rate = TAPAN_MCLK_CLK_9P6MHZ;
 
-	ret = wcd9xxx_mbhc_init(&tapan->mbhc, &tapan->resmgr, codec,
-				tapan_enable_mbhc_micbias,
+	tapan->micb_2_ref_cnt = 0;
+
+#ifndef CONFIG_SAMSUNG_JACK //Comment Disable MBHC
+	ret = wcd9xxx_mbhc_init(&tapan->mbhc, &tapan->resmgr, codec, NULL,
 				&mbhc_cb, &cdc_intr_ids, rco_clk_rate,
 				TAPAN_CDC_ZDET_SUPPORTED);
 
@@ -6211,6 +6764,7 @@ static int tapan_codec_probe(struct snd_soc_codec *codec)
 		pr_err("%s: mbhc init failed %d\n", __func__, ret);
 		return ret;
 	}
+#endif
 
 	tapan->codec = codec;
 	for (i = 0; i < COMPANDER_MAX; i++) {
@@ -6239,6 +6793,11 @@ static int tapan_codec_probe(struct snd_soc_codec *codec)
 		WCD9XXX_BG_CLK_UNLOCK(&tapan->resmgr);
 	}
 
+#if defined(CONFIG_SND_SOC_ES705)
+	remote_add_codec_controls(codec);
+#elif defined(CONFIG_SND_SOC_ES325_ATLANTIC)
+	es325_remote_add_codec_controls(codec);
+#endif
 	ptr = kmalloc((sizeof(tapan_rx_chs) +
 		       sizeof(tapan_tx_chs)), GFP_KERNEL);
 	if (!ptr) {
@@ -6302,6 +6861,10 @@ static int tapan_codec_probe(struct snd_soc_codec *codec)
 	if (ret)
 		tapan_cleanup_irqs(tapan);
 
+#ifdef CONFIG_ARCH_MSM8226
+	codec_probe_done = true;
+#endif
+
 	return ret;
 
 err_pdata:
@@ -6326,8 +6889,10 @@ static int tapan_codec_remove(struct snd_soc_codec *codec)
 
 	tapan_cleanup_irqs(tapan);
 
+#ifndef CONFIG_SAMSUNG_JACK //Comment Disable MBHC
 	/* cleanup MBHC */
 	wcd9xxx_mbhc_deinit(&tapan->mbhc);
+#endif
 	/* cleanup resmgr */
 	wcd9xxx_resmgr_deinit(&tapan->resmgr);
 

@@ -21,6 +21,7 @@
 #include <linux/ktime.h>
 #include <linux/smp.h>
 #include <linux/tick.h>
+#include <linux/sched.h>
 #include <linux/delay.h>
 #include <linux/platform_device.h>
 #include <linux/of_platform.h>
@@ -42,6 +43,9 @@
 #include "spm.h"
 #include "pm-boot.h"
 #include "clock.h"
+#ifdef CONFIG_SEC_DEBUG
+#include <mach/sec_debug.h>
+#endif
 
 #define CREATE_TRACE_POINTS
 #include <mach/trace_msm_low_power.h>
@@ -56,7 +60,7 @@
 
 #define MAX_BUF_SIZE  512
 
-static int msm_pm_debug_mask = 1;
+static int msm_pm_debug_mask __refdata = 1;
 module_param_named(
 	debug_mask, msm_pm_debug_mask, int, S_IRUGO | S_IWUSR | S_IWGRP
 );
@@ -113,14 +117,14 @@ static char *msm_pm_sleep_mode_labels[MSM_PM_SLEEP_MODE_NR] = {
 		"standalone_power_collapse",
 };
 
-static bool msm_pm_ldo_retention_enabled = true;
+static bool msm_pm_ldo_retention_enabled __refdata = true;
 static bool msm_no_ramp_down_pc;
 static struct msm_pm_sleep_status_data *msm_pm_slp_sts;
 DEFINE_PER_CPU(struct clk *, cpu_clks);
 static struct clk *l2_clk;
 
 static int cpu_count;
-static DEFINE_SPINLOCK(cpu_cnt_lock);
+static __refdata DEFINE_SPINLOCK(cpu_cnt_lock);
 #define SCM_HANDOFF_LOCK_ID "S:7"
 static bool need_scm_handoff_lock;
 static remote_spinlock_t scm_handoff_lock;
@@ -134,7 +138,7 @@ static void __iomem *msm_pc_debug_counters;
  * Default the l2 flush flag to OFF so the caches are flushed during power
  * collapse unless the explicitly voted by lpm driver.
  */
-static enum msm_pm_l2_scm_flag msm_pm_flush_l2_flag = MSM_SCM_L2_OFF;
+static enum msm_pm_l2_scm_flag msm_pm_flush_l2_flag __refdata = MSM_SCM_L2_OFF;
 
 void msm_pm_set_l2_flush_flag(enum msm_pm_l2_scm_flag flag)
 {
@@ -148,7 +152,7 @@ static enum msm_pm_l2_scm_flag msm_pm_get_l2_flush_flag(void)
 }
 
 static cpumask_t retention_cpus;
-static DEFINE_SPINLOCK(retention_lock);
+static __refdata DEFINE_SPINLOCK(retention_lock);
 
 static int msm_pm_get_pc_mode(struct device_node *node,
 		const char *key, uint32_t *pc_mode_val)
@@ -531,6 +535,10 @@ static int msm_pm_collapse(unsigned long unused)
 	return 0;
 }
 
+#ifdef CONFIG_SEC_PM_DEBUG
+extern int sec_print_masters_stats(void);
+#endif
+
 static bool __ref msm_pm_spm_power_collapse(
 	unsigned int cpu, bool from_idle, bool notify_rpm)
 {
@@ -560,8 +568,23 @@ static bool __ref msm_pm_spm_power_collapse(
 
 	msm_jtag_save_state();
 
+#ifdef CONFIG_SEC_DEBUG
+	secdbg_sched_msg("+pc(I:%d,R:%d)", from_idle, notify_rpm);
+#endif
+
 	collapsed = save_cpu_regs ?
 		!cpu_suspend(0, msm_pm_collapse) : msm_pm_pc_hotplug();
+
+
+#ifdef CONFIG_SEC_PM_DEBUG
+	if(from_idle == false && cpu == 0 && sec_debug_is_enabled()){
+		sec_print_masters_stats();
+	}
+#endif
+
+#ifdef CONFIG_SEC_DEBUG
+	secdbg_sched_msg("-pc(%d)", collapsed);
+#endif
 
 	if (save_cpu_regs) {
 		spin_lock(&cpu_cnt_lock);
@@ -817,13 +840,17 @@ int msm_cpu_pm_enter_sleep(enum msm_pm_sleep_mode mode, bool from_idle)
 
 int msm_pm_wait_cpu_shutdown(unsigned int cpu)
 {
-	int timeout = 10;
+	int timeout = 50;
 
 	if (!msm_pm_slp_sts)
 		return 0;
 	if (!msm_pm_slp_sts[cpu].base_addr)
 		return 0;
+#if defined(CONFIG_ARCH_MSM8974) || defined(CONFIG_ARCH_MSM8974PRO)
 	while (1) {
+#else
+	while (timeout--) {
+#endif
 		/*
 		 * Check for the SPM of the core being hotplugged to set
 		 * its sleep state.The SPM sleep state indicates that the
@@ -834,9 +861,14 @@ int msm_pm_wait_cpu_shutdown(unsigned int cpu)
 		if (acc_sts & msm_pm_slp_sts[cpu].mask)
 			return 0;
 		udelay(100);
+#if defined(CONFIG_ARCH_MSM8974) || defined(CONFIG_ARCH_MSM8974PRO)
 		WARN(++timeout == 20, "CPU%u didn't collapse in 2 ms\n", cpu);
+#endif
 	}
-
+#if !(defined(CONFIG_ARCH_MSM8974) || defined(CONFIG_ARCH_MSM8974PRO))
+	pr_info("%s(): Timed out waiting for CPU %u SPM to enter sleep state",
+		__func__, cpu);
+#endif
 	return -EBUSY;
 }
 
@@ -991,7 +1023,7 @@ static int msm_cpu_status_probe(struct platform_device *pdev)
 	return 0;
 };
 
-static struct of_device_id msm_slp_sts_match_tbl[] = {
+static struct of_device_id msm_slp_sts_match_tbl[] __initdata= {
 	{.compatible = "qcom,cpu-sleep-status"},
 	{},
 };
@@ -1005,7 +1037,7 @@ static struct platform_driver msm_cpu_status_driver = {
 	},
 };
 
-static struct of_device_id msm_snoc_clnt_match_tbl[] = {
+static struct of_device_id msm_snoc_clnt_match_tbl[] __initdata = {
 	{.compatible = "qcom,pm-snoc-client"},
 	{},
 };
@@ -1272,7 +1304,7 @@ static int msm_cpu_pm_probe(struct platform_device *pdev)
 	return ret;
 }
 
-static struct of_device_id msm_cpu_pm_table[] = {
+static struct of_device_id msm_cpu_pm_table[] __initdata = {
 	{.compatible = "qcom,pm-8x60"},
 	{},
 };
