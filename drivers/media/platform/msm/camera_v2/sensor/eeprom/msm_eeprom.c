@@ -942,22 +942,6 @@ static int msm_eeprom_spi_parse_of(struct msm_camera_spi_client *spic)
 	spic->mfr_id1 = tmp[0];
 	spic->device_id1 = tmp[1];
 
-	rc = of_property_read_u32_array(of, "qcom,eeprom-id2", tmp, 2);
-	if (rc < 0) {
-		pr_err("%s: Failed to get eeprom id 2\n", __func__);
-		return rc;
-	}
-	spic->mfr_id2 = tmp[0];
-	spic->device_id2 = tmp[1];
-
-	rc = of_property_read_u32_array(of, "qcom,eeprom-id3", tmp, 2);
-	if (rc < 0) {
-		pr_err("%s: Failed to get eeprom id 3\n", __func__);
-		return rc;
-	}
-	spic->mfr_id3 = tmp[0];
-	spic->device_id3 = tmp[1];
-
 	return 0;
 }
 

@@ -14,6 +14,9 @@
 #define pr_fmt(fmt) "%s:%d " fmt, __func__, __LINE__
 
 #include <linux/module.h>
+#if defined(CONFIG_LEDS_MAX77803)
+#include <linux/gpio.h>
+#endif
 // Implementation KTD2692 flashIC
 #if defined(CONFIG_MACH_VIENNA_LTE)
 #include <linux/gpio.h>
@@ -22,6 +25,9 @@
 #include <linux/platform_device.h>
 #endif
 
+#if defined(CONFIG_LEDS_MAX77803)
+#include <linux/leds-max77803.h>
+#endif
 #if defined(CONFIG_LEDS_MAX77804K)
 #include <linux/leds-max77804k.h>
 #include <linux/gpio.h>
@@ -43,6 +49,10 @@
 
 static struct msm_led_flash_ctrl_t fctrl;
 
+#if defined(CONFIG_LEDS_MAX77803)
+extern int led_flash_en;
+extern int led_torch_en;
+#endif
 #if defined(CONFIG_LEDS_MAX77804K)
 extern int led_flash_en;
 extern int led_torch_en;
@@ -193,7 +203,7 @@ static int32_t msm_led_trigger_config(struct msm_led_flash_ctrl_t *fctrl,
 {
 	int rc = 0;
 
-#if defined(CONFIG_LEDS_MAX77804K)
+#if defined(CONFIG_LEDS_MAX77803) || defined(CONFIG_LEDS_MAX77804K)
 	int ret;
 #endif
 	struct msm_camera_led_cfg_t *cfg = (struct msm_camera_led_cfg_t *)data;
@@ -207,38 +217,67 @@ static int32_t msm_led_trigger_config(struct msm_led_flash_ctrl_t *fctrl,
 		pr_err("failed\n");
 		return -EINVAL;
 	}
-#if defined(CONFIG_LEDS_MAX77804K)
+#if defined(CONFIG_LEDS_MAX77803) || defined(CONFIG_LEDS_MAX77804K)
 	switch (cfg->cfgtype) {
 	case MSM_CAMERA_LED_OFF:
 		pr_err("CAM Flash OFF");
+#if defined(CONFIG_LEDS_MAX77803)
+		max77803_led_en(0, 0);
+		max77803_led_en(0, 1);
+#else
 		max77804k_led_en(0, 0);
 		max77804k_led_en(0, 1);
+#endif
 		break;
 
 	case MSM_CAMERA_LED_LOW:
 		pr_err("CAM Pre Flash ON");
+#if defined(CONFIG_LEDS_MAX77803)
+		max77803_led_en(1, 0);
+#else
 		max77804k_led_en(1, 0);
+#endif
 		break;
 
 	case MSM_CAMERA_LED_HIGH:
 		pr_err("CAM Flash ON");
+#if defined(CONFIG_LEDS_MAX77803)
+		max77803_led_en(1, 1);
+#else
 		max77804k_led_en(1, 1);
+#endif
 		break;
 
 	case MSM_CAMERA_LED_INIT:
 		break;
 	case MSM_CAMERA_LED_RELEASE:
 		pr_err("CAM Flash OFF & release");
+#if defined(CONFIG_LEDS_MAX77803)
+		ret = gpio_request(led_flash_en, "max77803_flash_en");
+#else
 		ret = gpio_request(led_flash_en, "max77804k_flash_en");
+#endif
 		if (ret)
+#if defined(CONFIG_LEDS_MAX77803)
+			pr_err("can't get max77803_flash_en");
+#else
 			pr_err("can't get max77804k_flash_en");
+#endif
 		else {
 			gpio_direction_output(led_flash_en, 0);
 			gpio_free(led_flash_en);
 		}
+#if defined(CONFIG_LEDS_MAX77803)
+		ret = gpio_request(led_torch_en, "max77803_torch_en");
+#else
 		ret = gpio_request(led_torch_en, "max77804k_torch_en");
+#endif
 		if (ret)
+#if defined(CONFIG_LEDS_MAX77803)
+			pr_err("can't get max77803_torch_en");
+#else
 			pr_err("can't get max77804k_torch_en");
+#endif
 		else {
 			gpio_direction_output(led_torch_en, 0);
 			gpio_free(led_torch_en);

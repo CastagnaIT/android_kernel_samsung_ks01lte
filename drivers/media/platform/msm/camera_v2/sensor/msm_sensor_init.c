@@ -105,21 +105,15 @@ char cam_core_ver[3] = "L0"; //To check 2P2 version (AVDD 2.8V or AVDD 2.95V) : 
 static ssize_t back_camera_type_show(struct device *dev,
 				     struct device_attribute *attr, char *buf)
 {
-	char type_lsi[] = "LSI_S5K2P2XX\n";
-	char type_sony[] = "SONY_IMX240\n";
+	char type[] = "SONY_IMX135_FIMC_IS\n";
 
-	if (cam_core_ver[0] == 'L') {
-		return snprintf(buf, sizeof(type_lsi), "%s", type_lsi);
-	} else {
-		return snprintf(buf, sizeof(type_sony), "%s", type_sony);
-	}
-
+	 return snprintf(buf, sizeof(type), "%s", type);
 }
 
 static ssize_t front_camera_type_show(struct device *dev,
 				      struct device_attribute *attr, char *buf)
 {
-	char cam_type[] = "S5K8B1YX\n";
+	char cam_type[] = "S5K6B2YX\n";
 
 	return snprintf(buf, sizeof(cam_type), "%s", cam_type);
 }
@@ -129,8 +123,19 @@ char cam_fw_ver[40] = "NULL NULL\n";//multi module
 static ssize_t back_camera_firmware_show(struct device *dev,
 					 struct device_attribute *attr, char *buf)
 {
+#if defined(CONFIG_MACH_KS01SKT) || defined(CONFIG_MACH_KS01KTT)\
+	|| defined(CONFIG_MACH_KS01LGT)
+#if defined(CONFIG_MACH_KS01EUR)
+	char cam_fw[] = "O13Q0SAGC01 O13Q0SAGC01\n";/*Camsys_module,13mega_pixel,Qualcomm_isp,Sony_sensor*/
+	return snprintf(buf, sizeof(cam_fw), "%s", cam_fw);
+#else
 	CDBG("[FW_DBG] cam_fw_ver : %s\n", cam_fw_ver);
 	return snprintf(buf, sizeof(cam_fw_ver), "%s", cam_fw_ver);
+#endif
+#else // multi module case
+	CDBG("[FW_DBG] cam_fw_ver : %s\n", cam_fw_ver);
+	return snprintf(buf, sizeof(cam_fw_ver), "%s", cam_fw_ver);
+#endif
 }
 
 static ssize_t back_camera_firmware_store(struct device *dev,
@@ -280,7 +285,7 @@ static ssize_t back_isp_core_check_store(struct device *dev,
 static ssize_t front_camera_firmware_show(struct device *dev,
 					  struct device_attribute *attr, char *buf)
 {
-	char cam_fw[] = "S5K8B1YX N\n";
+	char cam_fw[] = "S5K6B2YX S5K6B2YX\n";
 
 	return snprintf(buf, sizeof(cam_fw), "%s", cam_fw);
 }
