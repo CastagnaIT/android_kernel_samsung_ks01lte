@@ -257,16 +257,12 @@ static int msm_eeprom_match_id(struct msm_eeprom_ctrl_t *e_ctrl)
 	if (rc < 0)
 		return rc;
 
-	pr_info("%s: read 0x%02X%02X, check Fidelix 32Mb:0x%02X%02X, Winbond 32Mb:0x%02X%02X, Macronix 32Mb:0x%02X%02X, GigaDevice 32Mb:0x%02X%02X\n", __func__,
+	pr_info("%s: read 0x%02X%02X, check Fidelix 32Mb:0x%02X%02X, Winbond 32Mb:0x%02X%02X\n", __func__,
 		id[0], id[1], client->spi_client->mfr_id0, client->spi_client->device_id0,
-		client->spi_client->mfr_id1, client->spi_client->device_id1,
-		client->spi_client->mfr_id2, client->spi_client->device_id2,
-		client->spi_client->mfr_id3, client->spi_client->device_id3);
+		client->spi_client->mfr_id1, client->spi_client->device_id1);
 
 	if ((id[0] == client->spi_client->mfr_id0 && id[1] == client->spi_client->device_id0)
-		|| (id[0] == client->spi_client->mfr_id1 && id[1] == client->spi_client->device_id1)
-		|| (id[0] == client->spi_client->mfr_id2 && id[1] == client->spi_client->device_id2)
-		|| (id[0] == client->spi_client->mfr_id3 && id[1] == client->spi_client->device_id3))
+	|| (id[0] == client->spi_client->mfr_id1 && id[1] == client->spi_client->device_id1))
 		return 0;
 
 	return -ENODEV;
