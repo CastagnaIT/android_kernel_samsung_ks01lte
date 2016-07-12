@@ -53,12 +53,8 @@
 #define CPP_CMD_TIMEOUT_MS 300
 #define MSM_CPP_MAX_TIMEOUT_TRIAL 10
 
-#if defined (CONFIG_SEC_S_PROJECT)
-#define MSM_CPP_NOMINAL_CLOCK 266670000//320000000
-#else
-#define MSM_CPP_NOMINAL_CLOCK 320000000
-#endif
-#define MSM_CPP_TURBO_CLOCK 465000000
+#define MSM_CPP_NOMINAL_CLOCK 266670000
+#define MSM_CPP_TURBO_CLOCK 320000000
 
 
 typedef struct _msm_cpp_timer_data_t {
@@ -154,10 +150,10 @@ static void msm_cpp_empty_list_eventdata(struct msm_device_queue *queue)
 
 static struct msm_cam_clk_info cpp_clk_info[] = {
 	{ "camss_top_ahb_clk", -1	 },
-	{ "vfe_clk_src",       320000000 },
+	{ "vfe_clk_src",       266670000 },
 	{ "camss_vfe_vfe_clk", -1	 },
 	{ "iface_clk",	       -1	 },
-	{ "cpp_core_clk",      320000000 },
+	{ "cpp_core_clk",      266670000 },
 	{ "cpp_iface_clk",     -1	 },
 	{ "cpp_bus_clk",       -1	 },
 	{ "micro_iface_clk",   -1	 },

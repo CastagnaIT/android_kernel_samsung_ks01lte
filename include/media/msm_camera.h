@@ -30,7 +30,7 @@
 
 #include <linux/msm_ion.h>
 
-//#define BYPASS_COMPANION
+#define BYPASS_COMPANION
 
 #define BIT(nr)   (1UL << (nr))
 
