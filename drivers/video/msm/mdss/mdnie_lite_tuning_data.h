@@ -737,6 +737,7 @@ char AUTO_UI_2[] = {
 	0x48,
 };
 
+#if 0
 static char OUTDOOR_UI_1[] = {
 	0xEB,
 	0x01, 0x00, 0x03,
@@ -782,6 +783,7 @@ static char OUTDOOR_UI_2[] = {
 	0xc3, 0x1f, 0x88,
 	0x04, 0xb5,
 };
+#endif
 
 ////////////////// GALLERY /////////////////////
 static char STANDARD_GALLERY_1[] = {
