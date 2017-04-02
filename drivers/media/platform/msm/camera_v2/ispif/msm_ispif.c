@@ -379,9 +379,9 @@ static void msm_ispif_enable_intf_cids(struct ispif_device *ispif,
 
 	data = msm_camera_io_r(ispif->base + intf_addr);
 	if (enable)
-		data |= cid_mask;
+		data |= (uint32_t)cid_mask;
 	else
-		data &= ~cid_mask;
+		data &= ~((uint32_t)cid_mask);
 	msm_camera_io_w_mb(data, ispif->base + intf_addr);
 }
 
