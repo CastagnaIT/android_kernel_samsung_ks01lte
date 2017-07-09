@@ -709,4 +709,8 @@ int __init wlan_partial_resume_init(void)
 
 late_initcall(wlan_partial_resume_init);
 #endif
+#if defined(CONFIG_DEFERRED_INITCALLS)
+deferred_initcall(brcm_wlan_init);
+#else
 device_initcall(brcm_wlan_init);
+#endif
